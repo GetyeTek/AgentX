@@ -5,7 +5,7 @@ const MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025";
 const GOOGLE_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
 
 // 100ms of 16kHz Mono 16-bit PCM silence (3200 bytes)
-// Smaller chunks are better for the "Voice Extractor" stability
+// Smaller chunks are "easier" for Google's voice extractor to digest
 const SILENCE_BASE64 = btoa(String.fromCharCode(...new Uint8Array(3200).fill(0)));
 
 serve(async (req) => {
@@ -17,137 +17,118 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] CLIENT CONNECTED ---");
+    console.log("--- [RELAY] 🟢 CLIENT CONNECTED ---");
     
     if (!GEMINI_API_KEY) {
-      console.error("--- [ERROR] GEMINI_API_KEY IS MISSING ---");
+      console.error("--- [ERROR] 🔴 GEMINI_API_KEY IS MISSING ---");
       clientSocket.close(4000, "Missing API Key");
       return;
     }
 
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
-    let heartbeatTimeout: number | undefined;
+    let silenceInterval: number | undefined;
     let isSetupConfirmed = false;
-    const messageQueue: any[] = [];
+    let lastMediaTime = 0; 
 
     const cleanup = (source: string) => {
-      console.log(`--- [RELAY] Cleaning up session. Source: ${source} ---`);
-      if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
+      console.log(`--- [RELAY] 🧹 Cleaning up. Source: ${source} ---`);
+      if (silenceInterval) clearInterval(silenceInterval);
       if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
       if (clientSocket.readyState === WebSocket.OPEN) clientSocket.close();
     };
 
-    // SELF-RESETTING HEARTBEAT
-    // This maintains the "Pulse" Google needs, but resets whenever we send a manual frame
-    const scheduleHeartbeat = () => {
-      if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
-      heartbeatTimeout = setTimeout(() => {
-        if (googleSocket.readyState === WebSocket.OPEN && isSetupConfirmed) {
-          googleSocket.send(JSON.stringify({
-            realtime_input: {
-              media_chunks: [{
-                mime_type: "audio/pcm;rate=16000",
-                data: SILENCE_BASE64
-              }]
-            }
-          }));
-          // Loop the heartbeat
-          scheduleHeartbeat();
-        }
-      }, 100); // 100ms interval for tight sync
+    // This ensures there is NEVER "dead air" on the connection
+    const sendPulse = () => {
+      const now = Date.now();
+      // Only send a standalone silence pulse if we haven't sent media in the last 150ms
+      if (isSetupConfirmed && googleSocket.readyState === WebSocket.OPEN && (now - lastMediaTime > 150)) {
+        googleSocket.send(JSON.stringify({
+          realtime_input: {
+            media_chunks: [{
+              mime_type: "audio/pcm;rate=16000",
+              data: SILENCE_BASE64
+            }]
+          }
+        }));
+      }
     };
 
     googleSocket.onopen = () => {
-      console.log("--- [SUCCESS] Google Gemini WebSocket Opened ---");
+      console.log("--- [GOOGLE] 🔵 Socket Opened. Sending Setup... ---");
       const setupMessage = {
         setup: {
           model: MODEL,
           generation_config: { response_modalities: ["TEXT"] },
           system_instruction: {
-            parts: [{ text: "You are a real-time screen observer. Briefly describe the screen snapshots sent to you. Focus on UI elements and text." }]
+            parts: [{ text: "You are a real-time screen observer. Briefly describe the screen snapshots sent to you." }]
           }
         }
       };
-      console.log("--- [RELAY] Sending Setup Message ---");
       googleSocket.send(JSON.stringify(setupMessage));
     };
 
     googleSocket.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      // WAIT FOR SETUP COMPLETE
+      // CRITICAL: Google logic says wait for setup_complete
       if (data.setup_complete) {
-        console.log("--- [RELAY] Google Setup Confirmed. Starting Heartbeat ---");
+        console.log("--- [GOOGLE] ✅ Setup Confirmed! Starting Audio Pulse ---");
         isSetupConfirmed = true;
-        scheduleHeartbeat();
-
-        console.log("--- [RELAY] Flushing queued messages: ", messageQueue.length);
-        while (messageQueue.length > 0) {
-          googleSocket.send(messageQueue.shift());
-        }
+        // Run a pulse every 200ms to keep the "Voice Extractor" warm
+        silenceInterval = setInterval(sendPulse, 200);
         return;
       }
 
-      // Relay model thoughts to the Android app
-      if (data.server_content?.model_turn) {
-        const thought = data.server_content.model_turn.parts?.[0]?.text;
-        if (thought) console.log("--- [AI THOUGHT]:", thought);
+      // Log model thoughts to Supabase console for debugging
+      if (data.server_content?.model_turn?.parts?.[0]?.text) {
+        console.log("--- [AI THOUGHT] 🧠:", data.server_content.model_turn.parts[0].text);
       }
 
+      // Relay everything else back to Android
       if (clientSocket.readyState === WebSocket.OPEN) {
         clientSocket.send(event.data);
       }
     };
 
     clientSocket.onmessage = (event) => {
-      let outboundData = event.data;
+      // If we aren't ready, just drop the frames to prevent 1007/1008 errors
+      if (!isSetupConfirmed || googleSocket.readyState !== WebSocket.OPEN) {
+        console.log("--- [RELAY] ⚠️ Dropping message: Setup not complete ---");
+        return;
+      }
 
       try {
-        const payload = JSON.parse(typeof outboundData === 'string' ? outboundData : new TextDecoder().decode(outboundData));
-        
+        const rawData = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+        const payload = JSON.parse(rawData);
+
         if (payload.realtime_input?.media_chunks) {
-          // RULE 1: Audio MUST be at the FRONT (Index 0) of the array
-          // This "tapes" audio to your image so Google never sees a "non-audio request"
+          console.log(`--- [APP -> GOOGLE] 📤 Sending Image (${payload.realtime_input.media_chunks[0].data.length} bytes) ---`);
+          
+          // THE "GOOGLE FIX": Audio MUST be present in the message and MUST be first
           payload.realtime_input.media_chunks.unshift({
             mime_type: "audio/pcm;rate=16000",
             data: SILENCE_BASE64
           });
-          
-          // Clean up any empty fields that confuse the Live API
-          if (payload.realtime_input.text === "") delete payload.realtime_input.text;
 
-          outboundData = JSON.stringify(payload);
-          
-          // RULE 2: Reset the heartbeat timer! 
-          // We just sent audio with the image, so we don't need a heartbeat for another 100ms.
-          // This prevents two messages from hitting Google at the exact same millisecond.
-          if (isSetupConfirmed) scheduleHeartbeat();
+          googleSocket.send(JSON.stringify(payload));
+          lastMediaTime = Date.now();
         }
       } catch (e) {
-        // Handle non-JSON or malformed messages
-      }
-
-      if (isSetupConfirmed && googleSocket.readyState === WebSocket.OPEN) {
-        googleSocket.send(outboundData);
-      } else {
-        console.log("--- [RELAY] Handshake in progress, queuing message ---");
-        messageQueue.push(outboundData);
-        if (messageQueue.length > 5) messageQueue.shift();
+        console.error("--- [RELAY ERROR] 🔴 ---", e.message);
       }
     };
 
     googleSocket.onclose = (e) => {
-      console.warn(`--- [GOOGLE CLOSED] Code: ${e.code}, Reason: ${e.reason} ---`);
-      cleanup("Google Close Event");
+      console.warn(`--- [GOOGLE] 🚫 CLOSED Code: ${e.code}, Reason: ${e.reason} ---`);
+      cleanup("Google Socket Closed");
     };
 
     googleSocket.onerror = (err) => {
-      console.error("--- [GOOGLE ERROR] ---", err);
-      cleanup("Google Error Event");
+      console.error("--- [GOOGLE] ❌ ERROR ---", err);
+      cleanup("Google Socket Error");
     };
 
-    clientSocket.onclose = () => cleanup("Client Close Event");
-    clientSocket.onerror = (err) => cleanup("Client Error Event");
+    clientSocket.onclose = () => cleanup("Client Disconnected");
   };
 
   return response;
