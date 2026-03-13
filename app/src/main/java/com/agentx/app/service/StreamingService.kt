@@ -70,6 +70,7 @@ class StreamingService : Service() {
                     val thought = parts?.optJSONObject(0)?.optString("text")
                     
                     if (!thought.isNullOrEmpty()) {
+                        DebugLogManager.log("AI_THOUGHT", thought)
                         AgentXAccessibilityService.instance?.updateThought(thought)
                     }
                 } catch (e: Exception) {
