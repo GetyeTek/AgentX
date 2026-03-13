@@ -45,9 +45,6 @@ serve(async (req) => {
         setup: {
           model: MODEL,
           generation_config: { response_modalities: ["TEXT"] },
-          input_metadata: {
-            audio_config: { sample_rate: 16000 }
-          },
           system_instruction: {
             parts: [{ text: "You are a real-time screen observer. Briefly describe the screen snapshots sent to you." }]
           }
