@@ -17,6 +17,7 @@ import android.util.Base64
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
+import com.agentx.app.DebugLogManager
 import okhttp3.*
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
@@ -56,10 +57,13 @@ class StreamingService : Service() {
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                DebugLogManager.log("WS", "Connected to Supabase Edge Function: ${response.code}")
+            }
+
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     val json = JSONObject(text)
-                    // Gemini Live API usually returns content in server_content.model_turn.parts[0].text
                     val serverContent = json.optJSONObject("server_content")
                     val modelTurn = serverContent?.optJSONObject("model_turn")
                     val parts = modelTurn?.optJSONArray("parts")
@@ -69,8 +73,17 @@ class StreamingService : Service() {
                         AgentXAccessibilityService.instance?.updateThought(thought)
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    DebugLogManager.log("JSON_ERROR", "Failed to parse: $text | Error: ${e.message}")
                 }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                val errorBody = response?.body?.string() ?: "No response body"
+                DebugLogManager.log("WS_FAILURE", "Error: ${t.message} | Code: ${response?.code} | Body: $errorBody")
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                DebugLogManager.log("WS_CLOSE", "Closing: $code / $reason")
             }
         })
         
