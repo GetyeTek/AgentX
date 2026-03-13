@@ -27,6 +27,8 @@ serve(async (req) => {
     console.log(`--- [RELAY] Connecting to Google Gemini: ${MODEL} ---`);
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     let silenceInterval: number | undefined;
+    let isSetupComplete = false;
+    const messageQueue: any[] = [];
 
     const cleanup = (source: string) => {
       console.log(`--- [RELAY] Cleaning up session. Triggered by: ${source} ---`);
@@ -54,7 +56,7 @@ serve(async (req) => {
       console.log("--- [RELAY] Sending Setup Message: ", JSON.stringify(setupMessage));
       googleSocket.send(JSON.stringify(setupMessage));
 
-      console.log("--- [RELAY] Starting 500ms Silent Heartbeat ---");
+      console.log("--- [RELAY] Starting 200ms Silent Heartbeat ---");
       silenceInterval = setInterval(() => {
         if (googleSocket.readyState === WebSocket.OPEN) {
           googleSocket.send(JSON.stringify({
@@ -66,7 +68,14 @@ serve(async (req) => {
             }
           }));
         }
-      }, 500);
+      }, 200);
+
+      isSetupComplete = true;
+      console.log("--- [RELAY] Setup complete, flushing queued messages: ", messageQueue.length);
+      while (messageQueue.length > 0) {
+        const msg = messageQueue.shift();
+        googleSocket.send(msg);
+      }
     };
 
     googleSocket.onmessage = (event) => {
@@ -90,16 +99,14 @@ serve(async (req) => {
     };
 
     clientSocket.onmessage = (event) => {
-      if (googleSocket.readyState === WebSocket.OPEN) {
-        // Only log non-binary messages to avoid flooding logs with image base64
-        if (typeof event.data === 'string' && event.data.length < 1000) {
-           console.log("--- [CLIENT -> GOOGLE] Control Message:", event.data);
-        } else {
-           console.log(`--- [CLIENT -> GOOGLE] Forwarding Media Chunk (${event.data.length} bytes) ---`);
-        }
+      if (isSetupComplete && googleSocket.readyState === WebSocket.OPEN) {
         googleSocket.send(event.data);
+      } else if (googleSocket.readyState === WebSocket.CONNECTING || !isSetupComplete) {
+        console.log("--- [RELAY] Queuing message until handshake finishes ---");
+        messageQueue.push(event.data);
+        if (messageQueue.length > 10) messageQueue.shift(); // Don't let the queue explode
       } else {
-        console.warn("--- [RELAY] Client sent data but Google is not connected! ---");
+        console.warn("--- [RELAY] Drop message, Google socket state: ", googleSocket.readyState);
       }
     };
 
