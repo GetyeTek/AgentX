@@ -1,8 +1,8 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-const MODEL = "models/gemini-2.0-flash-exp";
-const GOOGLE_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
+const MODEL = "models/gemini-2.0-flash-live-001";
+const GOOGLE_WS_URL = `wss://generativelanguage.googleapis.com/v1beta/${MODEL}:connectLiveStream?key=${GEMINI_API_KEY}`;
 
 serve(async (req) => {
   const upgrade = req.headers.get("upgrade") || "";
