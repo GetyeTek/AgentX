@@ -71,6 +71,15 @@ serve(async (req) => {
       }, 200);
 
       isSetupComplete = true;
+      
+      // Send an initial text 'ping' to wake up the model
+      googleSocket.send(JSON.stringify({
+        realtime_input: {
+          media_chunks: [{ mime_type: "audio/pcm;rate=16000", data: SILENCE_BASE64 }],
+          text: "System start. I am showing you my screen. Please observe."
+        }
+      }));
+
       console.log("--- [RELAY] Setup complete, flushing queued messages: ", messageQueue.length);
       while (messageQueue.length > 0) {
         const msg = messageQueue.shift();
@@ -99,12 +108,29 @@ serve(async (req) => {
     };
 
     clientSocket.onmessage = (event) => {
+      let outboundData = event.data;
+
+      // INTERCEPT AND INJECT SILENCE
+      try {
+        const payload = JSON.parse(typeof outboundData === 'string' ? outboundData : new TextDecoder().decode(outboundData));
+        if (payload.realtime_input?.media_chunks) {
+          // Add silence chunk to the SAME array so Google sees audio + image together
+          payload.realtime_input.media_chunks.push({
+            mime_type: "audio/pcm;rate=16000",
+            data: SILENCE_BASE64
+          });
+          outboundData = JSON.stringify(payload);
+        }
+      } catch (e) {
+        // Not JSON or malformed, just let it pass through
+      }
+
       if (isSetupComplete && googleSocket.readyState === WebSocket.OPEN) {
-        googleSocket.send(event.data);
+        googleSocket.send(outboundData);
       } else if (googleSocket.readyState === WebSocket.CONNECTING || !isSetupComplete) {
         console.log("--- [RELAY] Queuing message until handshake finishes ---");
-        messageQueue.push(event.data);
-        if (messageQueue.length > 10) messageQueue.shift(); // Don't let the queue explode
+        messageQueue.push(outboundData);
+        if (messageQueue.length > 10) messageQueue.shift();
       } else {
         console.warn("--- [RELAY] Drop message, Google socket state: ", googleSocket.readyState);
       }
