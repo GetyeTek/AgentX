@@ -71,9 +71,15 @@ serve(async (req) => {
 
       if (!isJson) console.log(`--- [RELAY] 🔊 Streaming AI Voice: ${event.data.size || event.data.byteLength} bytes ---`);
 
-      // Forward everything back to Android
+      // Forward to Android
       if (clientSocket.readyState === WebSocket.OPEN) {
-        clientSocket.send(event.data);
+        // CRITICAL: If it's JSON, send it as a String so Android's text handler triggers.
+        // If it's binary audio, send the raw bytes.
+        if (isJson) {
+          clientSocket.send(textContent);
+        } else {
+          clientSocket.send(event.data);
+        }
       }
     };
 
