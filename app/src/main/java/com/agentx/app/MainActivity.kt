@@ -37,25 +37,86 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+        override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            var showDebug by remember { mutableStateOf(false) }
-            Surface(modifier = Modifier.fillMaxSize()) {
-                Column {
-                    OnboardingScreen(
-                        onStartRequested = { checkPermissionsAndStart() },
-                        onDebugRequested = { showDebug = true }
-                    )
-                }
-                if (showDebug) {
-                    DebugDialog(onDismiss = { showDebug = false })
+            // FORCING DARK THEME
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                var showDebug by remember { mutableStateOf(false) }
+                var isMicEnabled by remember { mutableStateOf(false) }
+                
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("AgentX Controller", style = MaterialTheme.typography.headlineMedium)
+                        Spacer(modifier = Modifier.height(20.dp))
+                        
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Checkbox(checked = isMicEnabled, onCheckedChange = { isMicEnabled = it })
+                            Text("Enable Microphone (Audio + Video)")
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+                        
+                        Button(
+                            onClick = { checkPermissionsAndStart(isMicEnabled) }, 
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("🚀 START AGENT")
+                        }
+                        
+                        Spacer(modifier = Modifier.height(10.dp))
+                        
+                        Button(
+                            onClick = { stopService(Intent(this@MainActivity, StreamingService::class.java)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("🛑 STOP AGENT")
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+                        
+                        OutlinedButton(onClick = { showDebug = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("📜 VIEW RAW LOGS")
+                        }
+                    }
+                    
+                    if (showDebug) {
+                        DebugDialog(onDismiss = { showDebug = false })
+                    }
                 }
             }
         }
     }
 
-    private fun checkPermissionsAndStart() {
+    private fun checkPermissionsAndStart(micEnabled: Boolean) {
+        // Check Mic Permission
+        if (micEnabled && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 102)
+            return
+        }
+
+        // Check Overlay Permission
+        if (!Settings.canDrawOverlays(this)) {
+            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            startActivity(intent)
+            return
+        }
+
+        // Check Notification Permission (Android 13+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+                return
+            }
+        }
+        
+        val mpManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val intent = mpManager.createScreenCaptureIntent().apply {
+            putExtra("ENABLE_MIC", micEnabled)
+        }
+        projectionLauncher.launch(intent)
+    }
         // 1. Check Overlay Permission
         if (!Settings.canDrawOverlays(this)) {
             val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
