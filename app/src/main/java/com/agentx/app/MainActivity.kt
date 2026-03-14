@@ -142,12 +142,17 @@ fun DebugDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                val clip = ClipData.newPlainText("AgentX Logs", DebugLogManager.getAllLogs())
-                clipboard.setPrimaryClip(clip)
-            }) {
-                Text("Copy All")
+            Row {
+                TextButton(onClick = { DebugLogManager.clear() }) {
+                    Text("Clear", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = ClipData.newPlainText("AgentX Logs", DebugLogManager.getAllLogs())
+                    clipboard.setPrimaryClip(clip)
+                }) {
+                    Text("Copy All")
+                }
             }
         },
         dismissButton = {
