@@ -24,6 +24,10 @@ import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 import org.json.JSONArray
 
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+
 class StreamingService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -31,6 +35,9 @@ class StreamingService : Service() {
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
     private var webSocket: WebSocket? = null
+    private var isMicEnabled = false
+    private var isRunning = true
+
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
@@ -38,6 +45,7 @@ class StreamingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val resultCode = intent?.getIntExtra("RESULT_CODE", 0) ?: 0
         val resultData = intent?.getParcelableExtra<Intent>("RESULT_DATA")
+        isMicEnabled = intent?.getBooleanExtra("ENABLE_MIC", false) ?: false
 
         startForeground(1, createNotification())
 
@@ -61,15 +69,15 @@ class StreamingService : Service() {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                // LOG EVERYTHING RAW
+                DebugLogManager.log("RAW_GEMINI", text)
+                
                 try {
                     val json = JSONObject(text)
-                    
-                    // WATERFALL: Support both snake_case and CamelCase from Google
                     val serverContent = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
                     val modelTurn = serverContent?.optJSONObject("model_turn") ?: serverContent?.optJSONObject("modelTurn")
                     val parts = modelTurn?.optJSONArray("parts")
                     
-                    // Check for standard text output OR transcriptions
                     val textPart = parts?.optJSONObject(0)?.optString("text")
                     val transcription = serverContent?.optJSONObject("output_transcription")?.optString("text")
                         ?: serverContent?.optJSONObject("outputTranscription")?.optString("text")
@@ -77,13 +85,14 @@ class StreamingService : Service() {
                     val thought = textPart ?: transcription
                     
                     if (!thought.isNullOrEmpty()) {
-                        DebugLogManager.log("AI_THOUGHT", thought)
-                        // Update the floating overlay
-                        AgentXAccessibilityService.instance?.updateThought("AgentX: $thought")
+                        AgentXAccessibilityService.instance?.updateThought("🧠 $thought")
                     }
-                } catch (e: Exception) {
-                    // Usually just binary audio frames failing to parse as JSON, which is fine.
-                }
+                } catch (e: Exception) {}
+            }
+
+            override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
+                DebugLogManager.log("RAW_AUDIO", "Received ${bytes.size} audio bytes")
+                // Future: Add AudioTrack here to play AI voice
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -104,7 +113,6 @@ class StreamingService : Service() {
         val metrics = DisplayMetrics()
         wm.defaultDisplay.getRealMetrics(metrics)
         
-        // Scale down for AI processing (efficiency)
         val width = 720
         val height = (metrics.heightPixels.toFloat() / metrics.widthPixels * width).toInt()
 
@@ -118,12 +126,47 @@ class StreamingService : Service() {
         handlerThread = HandlerThread("CaptureThread").apply { start() }
         handler = Handler(handlerThread!!.looper)
 
+        // 1. VIDEO LOOP
         handler?.post(object : Runnable {
             override fun run() {
+                if (!isRunning) return
                 captureAndSendFrame()
-                handler?.postDelayed(this, 1500) // ~1 frame every 1.5 seconds
+                handler?.postDelayed(this, 1500)
             }
         })
+
+        // 2. AUDIO LOOP (If enabled)
+        if (isMicEnabled) {
+            Thread { startAudioCapture() }.start()
+        }
+    }
+
+    private fun startAudioCapture() {
+        val bufferSize = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val recorder = AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize)
+        
+        val buffer = ByteArray(3200) // 100ms chunks
+        recorder.startRecording()
+        
+        while (isRunning) {
+            val read = recorder.read(buffer, 0, buffer.size)
+            if (read > 0) {
+                val base64Audio = Base64.encodeToString(buffer.sliceArray(0 until read), Base64.NO_WRAP)
+                val payload = JSONObject().apply {
+                    put("realtime_input", JSONObject().apply {
+                        put("media_chunks", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("mime_type", "audio/pcm;rate=16000")
+                                put("data", base64Audio)
+                            })
+                        })
+                    })
+                }
+                webSocket?.send(payload.toString())
+            }
+        }
+        recorder.stop()
+        recorder.release()
     }
 
     private fun captureAndSendFrame() {
@@ -198,11 +241,13 @@ class StreamingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        isRunning = false
         handlerThread?.quitSafely()
         virtualDisplay?.release()
         imageReader?.close()
-        webSocket?.close(1000, "Service Destroyed")
+        webSocket?.close(1000, "Service Stopped")
         mediaProjection?.stop()
+        AgentXAccessibilityService.instance?.updateThought("AgentX: Offline")
         super.onDestroy()
     }
 }
