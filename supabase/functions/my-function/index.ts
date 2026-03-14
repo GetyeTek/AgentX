@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 import * as base64 from "https://deno.land/std@0.207.0/encoding/base64.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+// Using your requested model
 const MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025";
 const GOOGLE_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
 
@@ -16,84 +17,82 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 STARTING ---");
+    console.log("--- [RELAY] 🟢 Edge Function Connected ---");
+    
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
-    googleSocket.binaryType = "arraybuffer"; // Essential for handling binary responses
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // 1. Monitor connection phase
-    const connectionTimeout = setTimeout(() => {
-      if (googleSocket.readyState !== WebSocket.OPEN) {
-        console.error("--- [TIMEOUT] ⏳ Google Socket failed to reach OPEN state ---");
-      }
-    }, 5000);
+    // Setup a hang-detector
+    const setupTimeout = setTimeout(() => {
+      console.error("--- [DEBUG] ⏳ Setup Timeout: Google never sent setup_complete! ---");
+    }, 10000);
 
     googleSocket.onopen = () => {
-      clearTimeout(connectionTimeout);
       console.log("--- [GOOGLE] 🔵 Socket Opened. Sending Setup... ---");
       
-      // THIS STRUCTURE IS DERIVED DIRECTLY FROM THE gemini_live.py LOGIC
       const setupMsg = {
         setup: {
           model: MODEL,
-          // In the Live API, these are siblings under the 'setup' or 'config' umbrella
           generation_config: {
-            response_modalities: ["AUDIO"]
-          },
-          speech_config: {
-            voice_config: {
-              prebuilt_voice_config: {
-                voice_name: "Puck"
+            response_modalities: ["AUDIO"],
+            speech_config: {
+              voice_config: {
+                prebuilt_voice_config: {
+                  voice_name: "Puck" 
+                }
               }
             }
           },
-          system_instruction: {
-            parts: [{ text: "You are a helpful AI assistant." }]
-          }
+          // Some versions of the API reject empty transcription objects if not supported
+          // If it still hangs, we will try removing these two lines entirely.
+          input_audio_transcription: {}, 
+          output_audio_transcription: {}
         }
       };
 
       googleSocket.send(JSON.stringify(setupMsg));
-      console.log("--- [SENT] 📤 Setup message dispatched ---");
     };
 
     googleSocket.onmessage = async (event) => {
-      // DEBUG: Log that we received SOMETHING
-      console.log(`--- [RECEIVE] 📥 Message received (Type: ${typeof event.data}, Length: ${event.data.byteLength || event.data.length}) ---`);
+      // 🟢 DEBUG: LOG EVERY MESSAGE TYPE
+      console.log(`--- [GOOGLE] 📩 Received message. Type: ${typeof event.data}, Prototype: ${event.data?.constructor?.name}`);
 
       let rawData = event.data;
-      if (rawData instanceof ArrayBuffer) {
-        rawData = new TextDecoder().decode(rawData);
-      } else if (typeof rawData !== "string") {
+
+      // Robust decoding for Blobs (Deno/Edge specific)
+      if (rawData instanceof Blob) {
         rawData = await rawData.text();
+      } else if (rawData instanceof ArrayBuffer) {
+        rawData = new TextDecoder().decode(rawData);
       }
 
       let data;
       try {
         data = JSON.parse(rawData);
+        console.log("--- [GOOGLE] 📦 Parsed JSON:", JSON.stringify(data).slice(0, 150), "...");
       } catch (e) {
-        console.error("--- [ERROR] JSON Parse Fail. Content:", rawData.slice(0, 50));
+        console.error("--- [ERROR] JSON Parse Failed. First 50 chars:", String(rawData).slice(0, 50));
         return;
       }
 
-      // Handle Setup Success
+      // Handle Setup Completion
       if (data.setup_complete) {
-        console.log("--- [GOOGLE] ✅ Setup Accepted. Proceeding to Shovel... ---");
-        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        clearTimeout(setupTimeout);
+        console.log("--- [GOOGLE] ✅ Setup Accepted! ---");
         
         const { data: fileData, error } = await supabase.storage.from('Audio').download('audio.pcm');
-        if (error || !fileData) {
-          console.error("--- [STORAGE ERROR] ❌ ---", error);
-          return;
-        }
+        if (error || !fileData) return console.error("--- [STORAGE ERROR] ❌ ---", error);
 
         const uint8Array = new Uint8Array(await fileData.arrayBuffer());
-        const chunkSize = 6400; // 200ms
-        let offset = 0;
+        const chunkSize = 6400; 
 
+        console.log(`--- [SHOVEL] 📦 Streaming PCM bytes... ---`);
+
+        let offset = 0;
         const interval = setInterval(() => {
           if (googleSocket.readyState !== WebSocket.OPEN || offset >= uint8Array.length) {
             clearInterval(interval);
-            console.log("--- [SHOVEL] 🏁 Stream End ---");
+            console.log("--- [SHOVEL] 🏁 Finished ---");
             return;
           }
 
@@ -106,29 +105,28 @@ serve(async (req) => {
               }]
             }
           }));
+
           offset += chunkSize;
         }, 200);
         return;
       }
 
-      // Handle Model Responses / Transcriptions
+      // Transcriptions or Audio data
       if (data.server_content) {
-        if (data.server_content.model_turn) {
-           console.log("--- [AI RESPONSE] 🔊 Audio Chunk Received ---");
-        }
-        if (data.server_content.output_transcription) {
-           console.log("--- [AI TEXT] 🧠:", data.server_content.output_transcription.text);
-        }
+        const text = data.server_content.model_turn?.parts?.[0]?.text || data.server_content.output_transcription?.text;
+        if (text) console.log("--- [AI TEXT] 🧠:", text);
       }
 
-      // Relay everything to the frontend
+      // Relay to frontend
       if (clientSocket.readyState === WebSocket.OPEN) {
         clientSocket.send(event.data);
       }
     };
 
     googleSocket.onclose = (e) => {
-      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "No Reason"} ---`);
+      clearTimeout(setupTimeout);
+      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "None"} ---`);
+      clientSocket.close();
     };
 
     googleSocket.onerror = (err) => {
