@@ -19,6 +19,7 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.agentx.app.DebugLogManager
 import okhttp3.*
+import okio.ByteString
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
@@ -36,6 +37,8 @@ class StreamingService : Service() {
     private var handler: Handler? = null
     private var webSocket: WebSocket? = null
     private var isMicEnabled = false
+    
+    @Volatile
     private var isRunning = true
 
     private val client = OkHttpClient.Builder()
