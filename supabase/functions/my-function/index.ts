@@ -16,135 +16,102 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 STARTING RESILIENT SHOVEL ---");
+    console.log("--- [RELAY] 🟢 STARTING ---");
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    let setupConfirmed = false;
-    const setupTimeout = setTimeout(() => {
-      if (!setupConfirmed) console.error("--- [CRITICAL] ⏳ HANG DETECTED: No setup response from Google. ---");
-    }, 15000);
-
     googleSocket.onopen = () => {
-      console.log("--- [GOOGLE] 🔵 Sending Comprehensive Setup... ---");
-      
-      // We use the structure that most closely aligns with the successful "setupComplete" response
-      const setupMsg = {
+      console.log("--- [GOOGLE] 🔵 Sending Setup... ---");
+      googleSocket.send(JSON.stringify({
         setup: {
           model: MODEL,
-          generation_config: {
+          generation_config: { 
             response_modalities: ["AUDIO"],
-            speech_config: {
-              voice_config: {
-                prebuilt_voice_config: {
-                  voice_name: "Puck"
-                }
-              }
-            }
+            speech_config: { voice_config: { prebuilt_voice_config: { voice_name: "Puck" } } }
           },
-          // Waterfall: Some versions want these, some don't. Including empty objects is safest.
-          input_audio_transcription: {}, 
+          system_instruction: { parts: [{ text: "You are a helpful AI. Listen to the audio provided and summarize it." }] },
+          input_audio_transcription: {},
           output_audio_transcription: {}
         }
-      };
-
-      googleSocket.send(JSON.stringify(setupMsg));
+      }));
     };
 
     googleSocket.onmessage = async (event) => {
-      let rawData = event.data;
-
-      // Polyfill: Handle Blobs, ArrayBuffers, and Strings
-      if (rawData instanceof Blob) {
-        rawData = await rawData.text();
-      } else if (rawData instanceof ArrayBuffer) {
-        rawData = new TextDecoder().decode(rawData);
+      // Handle Binary vs Text
+      if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
+        console.log(`--- [GOOGLE] 🔊 Received Binary Data: ${event.data.size || event.data.byteLength} bytes (likely Audio) ---`);
+        if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(event.data);
+        return;
       }
 
       let data;
       try {
-        data = JSON.parse(rawData);
+        data = JSON.parse(event.data);
       } catch (e) {
-        console.error("--- [ERROR] Parse Fail. Data starts with:", String(rawData).slice(0, 50));
+        console.log("--- [GOOGLE] 📝 Received non-JSON text frame:", event.data.slice(0, 50));
         return;
       }
 
-      // --- WATERFALL LOGIC FOR SETUP CONFIRMATION ---
-      // Your logs showed "setupComplete". We check for both snake and camel case.
-      const isSetupReady = data.setup_complete || data.setupComplete;
-
-      if (isSetupReady && !setupConfirmed) {
-        setupConfirmed = true;
-        clearTimeout(setupTimeout);
-        console.log("--- [GOOGLE] ✅ Setup Ready (Detected via Waterfall). Fetching Storage... ---");
+      // 1. Setup Complete Logic
+      if (data.setup_complete || data.setupComplete) {
+        console.log("--- [GOOGLE] ✅ Setup Ready. Streaming Audio... ---");
         
-        const { data: fileData, error } = await supabase.storage.from('Audio').download('audio.pcm');
-        if (error || !fileData) return console.error("--- [STORAGE ERROR] ---", error);
+        const { data: fileData } = await supabase.storage.from('Audio').download('audio.pcm');
+        if (!fileData) return console.error("PCM Load Fail");
 
         const uint8Array = new Uint8Array(await fileData.arrayBuffer());
-        const chunkSize = 6400; // 200ms
-
-        console.log(`--- [SHOVEL] 📦 Streaming ${uint8Array.length} bytes ---`);
-
+        const chunkSize = 6400; 
         let offset = 0;
+
         const interval = setInterval(() => {
           if (googleSocket.readyState !== WebSocket.OPEN || offset >= uint8Array.length) {
             clearInterval(interval);
-            console.log("--- [SHOVEL] 🏁 Stream finished ---");
+            console.log("--- [SHOVEL] 🏁 Stream finished. Triggering AI Response... ---");
+            
+            // CRITICAL: Send a text turn to "end" the audio and ask for a response
+            googleSocket.send(JSON.stringify({
+              client_content: {
+                turns: [{ role: "user", parts: [{ text: "I have finished sending the audio. Please respond to what you heard." }] }],
+                turn_complete: true
+              }
+            }));
             return;
           }
 
           const chunk = uint8Array.slice(offset, offset + chunkSize);
-          
-          // Waterfall: Send binary if preferred, but JSON-wrapped Base64 is the documented standard
           googleSocket.send(JSON.stringify({
-            realtime_input: {
-              media_chunks: [{
-                mime_type: "audio/pcm;rate=16000",
-                data: base64.encode(chunk)
-              }]
-            }
+            realtime_input: { media_chunks: [{ mime_type: "audio/pcm;rate=16000", data: base64.encode(chunk) }] }
           }));
-
           offset += chunkSize;
-        }, 200); 
+        }, 200);
         return;
       }
 
-      // --- WATERFALL LOGIC FOR TRANSCRIPTIONS ---
-      // AI sometimes returns data in server_content or serverContent
+      // 2. Transcription & Text Waterfall
       const content = data.server_content || data.serverContent;
       if (content) {
-        const text = 
-          content.model_turn?.parts?.[0]?.text || 
-          content.output_transcription?.text || 
-          content.outputTranscription?.text;
-        
-        if (text) console.log("--- [AI TEXT] 🧠:", text);
+        // Look for model turn text
+        const parts = content.model_turn?.parts || content.modelTurn?.parts;
+        if (parts) {
+          parts.forEach(p => {
+            if (p.text) console.log("--- [AI TEXT] 🧠:", p.text);
+            if (p.inline_data || p.inlineData) console.log("--- [AI AUDIO] 🎵: Model sent audio chunk in JSON");
+          });
+        }
+        // Look for transcriptions
+        const transcript = content.output_transcription?.text || content.outputTranscription?.text;
+        if (transcript) console.log("--- [AI TRANSCRIPT] 💬:", transcript);
       }
 
-      // --- WATERFALL LOGIC FOR ERRORS ---
-      if (data.error) {
-        console.error("--- [GOOGLE API ERROR] ❌ ---", JSON.stringify(data.error));
-      }
+      // 3. Error Waterfall
+      if (data.error) console.error("--- [GOOGLE ERROR] ---", data.error);
 
-      // Relay back to client
-      if (clientSocket.readyState === WebSocket.OPEN) {
-        clientSocket.send(event.data);
-      }
+      // Relay JSON messages to client
+      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(event.data);
     };
 
-    googleSocket.onclose = (e) => {
-      clearTimeout(setupTimeout);
-      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "No Reason"} ---`);
-      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.close();
-    };
-
-    googleSocket.onerror = (err) => console.error("--- [GOOGLE WS ERROR] ---", err);
-
-    clientSocket.onclose = () => {
-      if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
-    };
+    googleSocket.onclose = (e) => console.warn(`--- [GOOGLE CLOSED] Code: ${e.code} ---`);
+    clientSocket.onclose = () => googleSocket.close();
   };
 
   return response;
