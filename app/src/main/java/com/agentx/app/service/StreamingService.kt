@@ -150,7 +150,7 @@ class StreamingService : Service() {
         val metrics = DisplayMetrics()
         wm.defaultDisplay.getRealMetrics(metrics)
         
-        val width = 720
+        val width = 1024
         val height = (metrics.heightPixels.toFloat() / metrics.widthPixels * width).toInt()
 
         imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
@@ -229,7 +229,7 @@ class StreamingService : Service() {
             val cleanBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, image.width, image.height)
 
             val out = ByteArrayOutputStream()
-            cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 50, out)
+            cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
             val base64Image = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 
             // 1. Send the visual data
