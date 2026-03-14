@@ -16,12 +16,12 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 Session Started ---");
+    console.log("--- [RELAY] 🟢 Session Active ---");
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     googleSocket.onopen = () => {
-      console.log("--- [GOOGLE] 🔵 Socket Connected. Sending Setup... ---");
+      console.log("--- [GOOGLE] 🔵 Sending Setup... ---");
       googleSocket.send(JSON.stringify({
         setup: {
           model: MODEL,
@@ -30,8 +30,11 @@ serve(async (req) => {
             speech_config: { voice_config: { prebuilt_voice_config: { voice_name: "Puck" } } }
           },
           system_instruction: { 
-            parts: [{ text: "You are a helpful AI with vision. Describe the visuals and audio provided." }] 
-          }
+            parts: [{ text: "You are a helpful AI assistant. You will receive 3 images and some audio. Describe the content of the images in detail and respond to the audio." }] 
+          },
+          // Enabling transcriptions so we see text in logs
+          input_audio_transcription: {},
+          output_audio_transcription: {}
         }
       }));
     };
@@ -40,7 +43,6 @@ serve(async (req) => {
       let data;
       let textContent = "";
 
-      // Handle binary frames (common in Deno for Google WS)
       if (event.data instanceof Blob) {
         textContent = await event.data.text();
       } else if (event.data instanceof ArrayBuffer) {
@@ -52,30 +54,37 @@ serve(async (req) => {
       try {
         data = JSON.parse(textContent);
       } catch {
-        // If not JSON, it's raw AI audio. Relay to frontend immediately.
+        // Raw binary audio from AI
+        console.log(`--- [GOOGLE] 🔊 AI is speaking (${event.data.size || event.data.byteLength} bytes) ---`);
         if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(event.data);
         return;
       }
 
-      // Check for Setup Success
+      // 1. Setup Success Waterfall
       if (data.setup_complete || data.setupComplete) {
-        console.log("--- [GOOGLE] ✅ Setup Ready. Starting Optimized Stream... ---");
-        runOptimizedMultimodalStream(googleSocket, supabase);
+        console.log("--- [GOOGLE] ✅ Setup Ready. Starting Stream... ---");
+        runSession(googleSocket, supabase);
         return;
       }
 
-      // Log AI responses
+      // 2. Transcription/Text Logic
       const content = data.server_content || data.serverContent;
       if (content) {
-        const text = content.model_turn?.parts?.[0]?.text || content.output_transcription?.text;
-        if (text) console.log("--- [AI RESPONSE] 🧠:", text);
+        const parts = content.model_turn?.parts || content.modelTurn?.parts;
+        if (parts) {
+          parts.forEach(p => {
+            if (p.text) console.log("--- [AI TEXT] 🧠:", p.text);
+          });
+        }
+        const transcript = content.output_transcription?.text || content.outputTranscription?.text;
+        if (transcript) console.log("--- [AI TRANSCRIPT] 💬:", transcript);
       }
 
-      // Relay all other JSON messages (like transcriptions) to the client
+      // Relay everything else (including potential JSON audio chunks)
       if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(textContent);
     };
 
-    googleSocket.onclose = (e) => console.warn(`--- [GOOGLE CLOSED] Code: ${e.code} ---`);
+    googleSocket.onclose = (e) => console.log("--- [GOOGLE CLOSED] ---", e.code);
     clientSocket.onclose = () => googleSocket.close();
   };
 
@@ -83,22 +92,19 @@ serve(async (req) => {
 });
 
 /**
- * MEMORY-OPTIMIZED STREAMER
- * Downloads and processes frames one-by-one to prevent OOM crashes.
+ * Main Session Logic
+ * Sequentially streams data then waits for response
  */
-async function runOptimizedMultimodalStream(googleSocket, supabase) {
+async function runSession(googleSocket, supabase) {
   try {
-    // 1. Download Audio (Necessary to have in buffer for the interval)
-    console.log("--- [STREAM] 📥 Downloading Audio... ---");
+    // A. FETCH ASSETS
     const { data: audioData } = await supabase.storage.from('Audio').download('audio.pcm');
     const audioBytes = new Uint8Array(await audioData.arrayBuffer());
 
-    // 2. Start Audio Interval (Low memory overhead)
+    // B. START AUDIO (Background Interval)
     let aOffset = 0;
     const aInterval = setInterval(() => {
-      if (googleSocket.readyState !== WebSocket.OPEN || aOffset >= audioBytes.length) {
-        return clearInterval(aInterval);
-      }
+      if (googleSocket.readyState !== WebSocket.OPEN || aOffset >= audioBytes.length) return clearInterval(aInterval);
       const chunk = audioBytes.slice(aOffset, aOffset + 6400);
       googleSocket.send(JSON.stringify({
         realtime_input: { media_chunks: [{ mime_type: "audio/pcm;rate=16000", data: base64.encode(chunk) }] }
@@ -106,39 +112,35 @@ async function runOptimizedMultimodalStream(googleSocket, supabase) {
       aOffset += 6400;
     }, 200);
 
-    // 3. Start Video Loop (Download-Send-Discard pattern)
-    console.log("--- [STREAM] 📸 Starting Sequential Video Stream... ---");
+    // C. START VIDEO (Sequential)
     for (let i = 1; i <= 3; i++) {
       if (googleSocket.readyState !== WebSocket.OPEN) break;
-
-      console.log(`--- [VIDEO] 📥 Fetching & Sending Frame ${i}... ---`);
-      const { data: imgData, error } = await supabase.storage.from('Audio').download(`frame${i}.jpg`);
-      
-      if (!error && imgData) {
-        const imgBytes = new Uint8Array(await imgData.arrayBuffer());
+      const { data: img } = await supabase.storage.from('Audio').download(`frame${i}.jpg`);
+      if (img) {
+        const bytes = new Uint8Array(await img.arrayBuffer());
         googleSocket.send(JSON.stringify({
-          realtime_input: {
-            media_chunks: [{
-              mime_type: "image/jpeg",
-              data: base64.encode(imgBytes)
-            }]
-          }
+          realtime_input: { media_chunks: [{ mime_type: "image/jpeg", data: base64.encode(bytes) }] }
         }));
-        // Small delay to let GC work and Google process
-        await new Promise(r => setTimeout(r, 1000));
+        console.log(`--- [STREAM] 📸 Sent Frame ${i} ---`);
       }
+      await new Promise(r => setTimeout(r, 1000));
     }
 
-    // 4. Final Trigger
-    console.log("--- [STREAM] 🏁 Finished. Nudging AI... ---");
+    // D. THE FINAL NUDGE
+    console.log("--- [STREAM] 🏁 Sending Final Nudge. Waiting for AI... ---");
     googleSocket.send(JSON.stringify({
-      clientContent: {
-        turns: [{ role: "user", parts: [{ text: "I've sent the images and audio. Tell me what you saw." }] }],
-        turnComplete: true
+      client_content: {
+        turns: [{ role: "user", parts: [{ text: "Please describe the 3 frames and the audio I just sent." }] }],
+        turn_complete: true
       }
     }));
 
+    // E. PERSISTENCE MANTRA
+    // We wait 30 seconds after the nudge to keep the function alive for the AI response
+    await new Promise(r => setTimeout(r, 30000));
+    console.log("--- [RELAY] 🏁 Session Timeout reached. Cleaning up. ---");
+
   } catch (err) {
-    console.error("--- [STREAM CRASH] ---", err);
+    console.error("--- [CRITICAL ERROR] ---", err);
   }
 }
