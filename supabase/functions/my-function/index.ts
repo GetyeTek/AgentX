@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-client@2.39.7";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025";
