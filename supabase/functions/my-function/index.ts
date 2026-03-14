@@ -3,7 +3,6 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 import * as base64 from "https://deno.land/std@0.207.0/encoding/base64.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-// Using your requested model
 const MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025";
 const GOOGLE_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
 
@@ -17,19 +16,19 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 Edge Function Connected ---");
-    
+    console.log("--- [RELAY] 🟢 STARTING RESILIENT SHOVEL ---");
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Setup a hang-detector
+    let setupConfirmed = false;
     const setupTimeout = setTimeout(() => {
-      console.error("--- [DEBUG] ⏳ Setup Timeout: Google never sent setup_complete! ---");
-    }, 10000);
+      if (!setupConfirmed) console.error("--- [CRITICAL] ⏳ HANG DETECTED: No setup response from Google. ---");
+    }, 15000);
 
     googleSocket.onopen = () => {
-      console.log("--- [GOOGLE] 🔵 Socket Opened. Sending Setup... ---");
+      console.log("--- [GOOGLE] 🔵 Sending Comprehensive Setup... ---");
       
+      // We use the structure that most closely aligns with the successful "setupComplete" response
       const setupMsg = {
         setup: {
           model: MODEL,
@@ -38,13 +37,12 @@ serve(async (req) => {
             speech_config: {
               voice_config: {
                 prebuilt_voice_config: {
-                  voice_name: "Puck" 
+                  voice_name: "Puck"
                 }
               }
             }
           },
-          // Some versions of the API reject empty transcription objects if not supported
-          // If it still hangs, we will try removing these two lines entirely.
+          // Waterfall: Some versions want these, some don't. Including empty objects is safest.
           input_audio_transcription: {}, 
           output_audio_transcription: {}
         }
@@ -54,12 +52,9 @@ serve(async (req) => {
     };
 
     googleSocket.onmessage = async (event) => {
-      // 🟢 DEBUG: LOG EVERY MESSAGE TYPE
-      console.log(`--- [GOOGLE] 📩 Received message. Type: ${typeof event.data}, Prototype: ${event.data?.constructor?.name}`);
-
       let rawData = event.data;
 
-      // Robust decoding for Blobs (Deno/Edge specific)
+      // Polyfill: Handle Blobs, ArrayBuffers, and Strings
       if (rawData instanceof Blob) {
         rawData = await rawData.text();
       } else if (rawData instanceof ArrayBuffer) {
@@ -69,34 +64,39 @@ serve(async (req) => {
       let data;
       try {
         data = JSON.parse(rawData);
-        console.log("--- [GOOGLE] 📦 Parsed JSON:", JSON.stringify(data).slice(0, 150), "...");
       } catch (e) {
-        console.error("--- [ERROR] JSON Parse Failed. First 50 chars:", String(rawData).slice(0, 50));
+        console.error("--- [ERROR] Parse Fail. Data starts with:", String(rawData).slice(0, 50));
         return;
       }
 
-      // Handle Setup Completion
-      if (data.setup_complete) {
+      // --- WATERFALL LOGIC FOR SETUP CONFIRMATION ---
+      // Your logs showed "setupComplete". We check for both snake and camel case.
+      const isSetupReady = data.setup_complete || data.setupComplete;
+
+      if (isSetupReady && !setupConfirmed) {
+        setupConfirmed = true;
         clearTimeout(setupTimeout);
-        console.log("--- [GOOGLE] ✅ Setup Accepted! ---");
+        console.log("--- [GOOGLE] ✅ Setup Ready (Detected via Waterfall). Fetching Storage... ---");
         
         const { data: fileData, error } = await supabase.storage.from('Audio').download('audio.pcm');
-        if (error || !fileData) return console.error("--- [STORAGE ERROR] ❌ ---", error);
+        if (error || !fileData) return console.error("--- [STORAGE ERROR] ---", error);
 
         const uint8Array = new Uint8Array(await fileData.arrayBuffer());
-        const chunkSize = 6400; 
+        const chunkSize = 6400; // 200ms
 
-        console.log(`--- [SHOVEL] 📦 Streaming PCM bytes... ---`);
+        console.log(`--- [SHOVEL] 📦 Streaming ${uint8Array.length} bytes ---`);
 
         let offset = 0;
         const interval = setInterval(() => {
           if (googleSocket.readyState !== WebSocket.OPEN || offset >= uint8Array.length) {
             clearInterval(interval);
-            console.log("--- [SHOVEL] 🏁 Finished ---");
+            console.log("--- [SHOVEL] 🏁 Stream finished ---");
             return;
           }
 
           const chunk = uint8Array.slice(offset, offset + chunkSize);
+          
+          // Waterfall: Send binary if preferred, but JSON-wrapped Base64 is the documented standard
           googleSocket.send(JSON.stringify({
             realtime_input: {
               media_chunks: [{
@@ -107,17 +107,28 @@ serve(async (req) => {
           }));
 
           offset += chunkSize;
-        }, 200);
+        }, 200); 
         return;
       }
 
-      // Transcriptions or Audio data
-      if (data.server_content) {
-        const text = data.server_content.model_turn?.parts?.[0]?.text || data.server_content.output_transcription?.text;
+      // --- WATERFALL LOGIC FOR TRANSCRIPTIONS ---
+      // AI sometimes returns data in server_content or serverContent
+      const content = data.server_content || data.serverContent;
+      if (content) {
+        const text = 
+          content.model_turn?.parts?.[0]?.text || 
+          content.output_transcription?.text || 
+          content.outputTranscription?.text;
+        
         if (text) console.log("--- [AI TEXT] 🧠:", text);
       }
 
-      // Relay to frontend
+      // --- WATERFALL LOGIC FOR ERRORS ---
+      if (data.error) {
+        console.error("--- [GOOGLE API ERROR] ❌ ---", JSON.stringify(data.error));
+      }
+
+      // Relay back to client
       if (clientSocket.readyState === WebSocket.OPEN) {
         clientSocket.send(event.data);
       }
@@ -125,13 +136,11 @@ serve(async (req) => {
 
     googleSocket.onclose = (e) => {
       clearTimeout(setupTimeout);
-      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "None"} ---`);
-      clientSocket.close();
+      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "No Reason"} ---`);
+      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.close();
     };
 
-    googleSocket.onerror = (err) => {
-      console.error("--- [GOOGLE ERROR] ❌ ---", err);
-    };
+    googleSocket.onerror = (err) => console.error("--- [GOOGLE WS ERROR] ---", err);
 
     clientSocket.onclose = () => {
       if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
