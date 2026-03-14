@@ -109,4 +109,6 @@ serve(async (req) => {
       if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
     };
   };
+
+  return response;
 });
