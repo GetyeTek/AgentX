@@ -54,6 +54,7 @@ class StreamingService : Service() {
         startForeground(1, createNotification())
 
         if (resultData != null) {
+            AgentXAccessibilityService.instance?.updateThought("AgentX: Connecting...")
             val mpManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mediaProjection = mpManager.getMediaProjection(resultCode, resultData)
             connectWebSocket()
@@ -70,6 +71,7 @@ class StreamingService : Service() {
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 DebugLogManager.log("WS", "Pipe Open: ${response.code}")
+                AgentXAccessibilityService.instance?.updateThought("AgentX: Listening...")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
