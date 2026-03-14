@@ -69,55 +69,65 @@ class StreamingService : Service() {
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                DebugLogManager.log("WS", "Connected to Supabase Edge Function: ${response.code}")
+                DebugLogManager.log("WS", "Pipe Open: ${response.code}")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                // LOG EVERYTHING RAW
-                DebugLogManager.log("RAW_GEMINI", text)
-                
-                try {
-                    val json = JSONObject(text)
-                    val serverContent = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
-                    val modelTurn = serverContent?.optJSONObject("model_turn") ?: serverContent?.optJSONObject("modelTurn")
-                    val parts = modelTurn?.optJSONArray("parts")
-                    
-                    val textPart = parts?.optJSONObject(0)?.optString("text")
-                    val transcription = serverContent?.optJSONObject("output_transcription")?.optString("text")
-                        ?: serverContent?.optJSONObject("outputTranscription")?.optString("text")
-
-                    // Accumulate or show latest thought
-                    val thought = textPart ?: transcription
-                    
-                    if (!thought.isNullOrEmpty()) {
-                        // Accumulate thoughts for the HUD
-                        thoughtBuffer.append(thought)
-                        val fullThought = thoughtBuffer.toString().trim()
-
-                        DebugLogManager.log("GEMINI", thought)
-                        
-                        val service = AgentXAccessibilityService.instance
-                        if (service != null) {
-                            service.updateThought("🧠 $fullThought")
-                        } else {
-                            DebugLogManager.log("HUD_ERROR", "Accessibility Service not running!")
-                        }
-                    }
-                } catch (e: Exception) {}
+                processIncoming(text)
             }
 
-            override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
-                DebugLogManager.log("RAW_AUDIO", "Received ${bytes.size} audio bytes")
-                // Future: Add AudioTrack here to play AI voice
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                val content = bytes.utf8()
+                if (content.trim().startsWith("{")) {
+                    processIncoming(content)
+                } else {
+                    // Real audio data usually arrives as binary
+                    DebugLogManager.log("AUDIO_IN", "Received ${bytes.size} bytes")
+                }
+            }
+
+            private fun processIncoming(raw: String) {
+                try {
+                    val json = JSONObject(raw)
+                    // Debug Log everything for deep tracing
+                    DebugLogManager.log("RAW_JSON", raw)
+
+                    // WATERFALL PARSING STRATEGY
+                    val sc = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
+                    
+                    // 1. Try to find model text parts (streaming response)
+                    val mt = sc?.optJSONObject("model_turn") ?: sc?.optJSONObject("modelTurn")
+                    val parts = mt?.optJSONArray("parts")
+                    var extractedText = ""
+                    if (parts != null) {
+                        for (i in 0 until parts.length()) {
+                            extractedText += parts.optJSONObject(i)?.optString("text") ?: ""
+                        }
+                    }
+
+                    // 2. Fallback to transcription (user echo)
+                    if (extractedText.isEmpty()) {
+                        extractedText = sc?.optJSONObject("output_transcription")?.optString("text")
+                            ?: sc?.optJSONObject("outputTranscription")?.optString("text") ?: ""
+                    }
+
+                    if (extractedText.isNotEmpty()) {
+                        DebugLogManager.log("GEMINI", extractedText)
+                        AgentXAccessibilityService.instance?.updateThought("🧠 $extractedText")
+                    } else if (json.has("setup_complete") || json.has("setupComplete")) {
+                        DebugLogManager.log("SYSTEM", "Gemini Setup Confirmed")
+                    }
+                } catch (e: Exception) {
+                    DebugLogManager.log("PARSE_ERR", "Failed to decode: ${e.message}")
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                val errorBody = response?.body?.string() ?: "No response body"
-                DebugLogManager.log("WS_FAILURE", "Error: ${t.message} | Code: ${response?.code} | Body: $errorBody")
+                DebugLogManager.log("WS_FAIL", "${t.message}")
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                DebugLogManager.log("WS_CLOSE", "Closing: $code / $reason")
+                DebugLogManager.log("WS_CLOSE", "$code: $reason")
             }
         })
         
