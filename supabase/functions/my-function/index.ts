@@ -3,7 +3,6 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 import * as base64 from "https://deno.land/std@0.207.0/encoding/base64.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-// Using your exact requested model endpoint
 const MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025";
 const GOOGLE_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
 
@@ -19,20 +18,17 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 STARTING CONNECTION ---");
+    console.log("--- [RELAY] 🟢 STARTING ---");
     
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // This ensures binary messages are easier to handle, though we primarily expect JSON strings wrapped in binary frames
+    googleSocket.binaryType = "arraybuffer";
+
     googleSocket.onopen = () => {
-      console.log("--- [GOOGLE] 🔵 Socket Opened. Sending Configured Setup... ---");
+      console.log("--- [GOOGLE] 🔵 Socket Opened. Sending Setup... ---");
       
-      /**
-       * STRUCTURE NOTES:
-       * 1. speech_config MUST be inside generation_config (fixes your 1007 'Unknown name' error).
-       * 2. transcription fields MUST be empty objects {} (fixes your 'Unknown name enabled' error).
-       * 3. model MUST match your specific 2.5-flash-native-audio string.
-       */
       const setupMsg = {
         setup: {
           model: MODEL,
@@ -41,60 +37,69 @@ serve(async (req) => {
             speech_config: {
               voice_config: {
                 prebuilt_voice_config: {
-                  voice_name: "Puck" // Options: Puck, Charon, Kore, Fenrir, Aoede
+                  voice_name: "Puck" 
                 }
               }
             }
           },
           system_instruction: {
-            parts: [{ text: "You are a helpful assistant. Introduction yourself briefly." }]
+            parts: [{ text: "You are a helpful assistant." }]
           },
           input_audio_transcription: {}, 
           output_audio_transcription: {}
         }
       };
 
-      console.log("--- [DEBUG] Outgoing Setup JSON:", JSON.stringify(setupMsg, null, 2));
       googleSocket.send(JSON.stringify(setupMsg));
     };
 
     googleSocket.onmessage = async (event) => {
+      let rawData = event.data;
+
+      // FIX: Handle Blob/ArrayBuffer data from Deno's WebSocket
+      if (rawData instanceof ArrayBuffer) {
+        rawData = new TextDecoder().decode(rawData);
+      } else if (typeof rawData !== "string") {
+        // Handle Blob if binaryType wasn't set or supported
+        rawData = await rawData.text();
+      }
+
       let data;
       try {
-        data = JSON.parse(event.data);
+        data = JSON.parse(rawData);
       } catch (e) {
-        console.error("--- [ERROR] JSON Parse Fail:", event.data);
+        console.error("--- [ERROR] JSON Parse Fail. Raw data length:", rawData.length);
+        console.error("--- [ERROR] Content snippet:", rawData.slice(0, 100));
         return;
       }
 
       // 1. Handle Setup Confirmation
       if (data.setup_complete) {
-        console.log("--- [GOOGLE] ✅ Setup Complete. Fetching PCM Shovel... ---");
+        console.log("--- [GOOGLE] ✅ Setup Accepted. Downloading PCM... ---");
         
         const { data: fileData, error } = await supabase.storage
           .from('Audio')
           .download('audio.pcm');
 
         if (error || !fileData) {
-          console.error("--- [SUPABASE ERROR] ❌ ---", error);
+          console.error("--- [STORAGE ERROR] ❌ ---", error);
           return;
         }
 
         const uint8Array = new Uint8Array(await fileData.arrayBuffer());
-        const chunkSize = 6400; // ~200ms of 16kHz 16-bit PCM
+        const chunkSize = 6400; // 200ms
 
         console.log(`--- [SHOVEL] 📦 Streaming ${uint8Array.length} bytes ---`);
 
         let offset = 0;
-        const shovelInterval = setInterval(() => {
+        const interval = setInterval(() => {
           if (googleSocket.readyState !== WebSocket.OPEN || offset >= uint8Array.length) {
-            console.log("--- [SHOVEL] 🏁 Finished sending file or Socket Closed ---");
-            clearInterval(shovelInterval);
+            clearInterval(interval);
+            console.log("--- [SHOVEL] 🏁 Stream complete ---");
             return;
           }
 
           const chunk = uint8Array.slice(offset, offset + chunkSize);
-          
           googleSocket.send(JSON.stringify({
             realtime_input: {
               media_chunks: [{
@@ -105,45 +110,30 @@ serve(async (req) => {
           }));
 
           offset += chunkSize;
-          if (offset % (chunkSize * 5) === 0) {
-             console.log(`--- [SHOVEL] 📤 Progress: ${((offset/uint8Array.length)*100).toFixed(1)}% ---`);
-          }
-        }, 200); // 200ms pacing to prevent buffer overflow 1007 errors
+        }, 200); 
 
         return;
       }
 
-      // 2. Handle Server Content (Transcriptions)
-      const aiTranscription = data.server_content?.output_transcription?.text;
-      if (aiTranscription) {
-        console.log("--- [AI TEXT] 🧠:", aiTranscription);
-      }
+      // 2. Log Debug Info (Transcriptions)
+      const aiText = data.server_content?.output_transcription?.text;
+      if (aiText) console.log("--- [AI TEXT] 🧠:", aiText);
 
-      const userTranscription = data.server_content?.input_transcription?.text;
-      if (userTranscription) {
-        console.log("--- [USER TEXT] 🗣️:", userTranscription);
-      }
-
-      // 3. Relay everything back to the client (Audio PCM chunks, etc.)
+      // 3. Forward message back to client (Frontend)
       if (clientSocket.readyState === WebSocket.OPEN) {
+        // Send the raw original data (Google likes strings or binary)
         clientSocket.send(event.data);
       }
     };
 
     googleSocket.onclose = (e) => {
-      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "Unknown"} ---`);
-      if (e.code === 1007) {
-        console.error("--- [CRITICAL] Error 1007: The JSON structure or an argument is still being rejected by Google. Check nesting of speech_config inside generation_config. ---");
-      }
+      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "None"} ---`);
       clientSocket.close();
     };
 
-    googleSocket.onerror = (err) => {
-      console.error("--- [GOOGLE ERROR] ❌ ---", err);
-    };
+    googleSocket.onerror = (err) => console.error("--- [GOOGLE ERROR] ❌ ---", err);
 
     clientSocket.onclose = () => {
-      console.log("--- [RELAY] ⚪ Client disconnected ---");
       if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
     };
   };
