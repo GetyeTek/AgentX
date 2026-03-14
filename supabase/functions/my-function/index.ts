@@ -11,56 +11,59 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "
 
 serve(async (req) => {
   const upgrade = req.headers.get("upgrade") || "";
-  if (upgrade.toLowerCase() != "websocket") {
-    return new Response("Not a websocket", { status: 426 });
-  }
+  if (upgrade.toLowerCase() != "websocket") return new Response("Not a websocket", { status: 426 });
 
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
     console.log("--- [RELAY] 🟢 STARTING ---");
-    
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    googleSocket.binaryType = "arraybuffer"; // Essential for handling binary responses
 
-    // This ensures binary messages are easier to handle, though we primarily expect JSON strings wrapped in binary frames
-    googleSocket.binaryType = "arraybuffer";
+    // 1. Monitor connection phase
+    const connectionTimeout = setTimeout(() => {
+      if (googleSocket.readyState !== WebSocket.OPEN) {
+        console.error("--- [TIMEOUT] ⏳ Google Socket failed to reach OPEN state ---");
+      }
+    }, 5000);
 
     googleSocket.onopen = () => {
+      clearTimeout(connectionTimeout);
       console.log("--- [GOOGLE] 🔵 Socket Opened. Sending Setup... ---");
       
+      // THIS STRUCTURE IS DERIVED DIRECTLY FROM THE gemini_live.py LOGIC
       const setupMsg = {
         setup: {
           model: MODEL,
+          // In the Live API, these are siblings under the 'setup' or 'config' umbrella
           generation_config: {
-            response_modalities: ["AUDIO"],
-            speech_config: {
-              voice_config: {
-                prebuilt_voice_config: {
-                  voice_name: "Puck" 
-                }
+            response_modalities: ["AUDIO"]
+          },
+          speech_config: {
+            voice_config: {
+              prebuilt_voice_config: {
+                voice_name: "Puck"
               }
             }
           },
           system_instruction: {
-            parts: [{ text: "You are a helpful assistant." }]
-          },
-          input_audio_transcription: {}, 
-          output_audio_transcription: {}
+            parts: [{ text: "You are a helpful AI assistant." }]
+          }
         }
       };
 
       googleSocket.send(JSON.stringify(setupMsg));
+      console.log("--- [SENT] 📤 Setup message dispatched ---");
     };
 
     googleSocket.onmessage = async (event) => {
-      let rawData = event.data;
+      // DEBUG: Log that we received SOMETHING
+      console.log(`--- [RECEIVE] 📥 Message received (Type: ${typeof event.data}, Length: ${event.data.byteLength || event.data.length}) ---`);
 
-      // FIX: Handle Blob/ArrayBuffer data from Deno's WebSocket
+      let rawData = event.data;
       if (rawData instanceof ArrayBuffer) {
         rawData = new TextDecoder().decode(rawData);
       } else if (typeof rawData !== "string") {
-        // Handle Blob if binaryType wasn't set or supported
         rawData = await rawData.text();
       }
 
@@ -68,19 +71,16 @@ serve(async (req) => {
       try {
         data = JSON.parse(rawData);
       } catch (e) {
-        console.error("--- [ERROR] JSON Parse Fail. Raw data length:", rawData.length);
-        console.error("--- [ERROR] Content snippet:", rawData.slice(0, 100));
+        console.error("--- [ERROR] JSON Parse Fail. Content:", rawData.slice(0, 50));
         return;
       }
 
-      // 1. Handle Setup Confirmation
+      // Handle Setup Success
       if (data.setup_complete) {
-        console.log("--- [GOOGLE] ✅ Setup Accepted. Downloading PCM... ---");
+        console.log("--- [GOOGLE] ✅ Setup Accepted. Proceeding to Shovel... ---");
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
         
-        const { data: fileData, error } = await supabase.storage
-          .from('Audio')
-          .download('audio.pcm');
-
+        const { data: fileData, error } = await supabase.storage.from('Audio').download('audio.pcm');
         if (error || !fileData) {
           console.error("--- [STORAGE ERROR] ❌ ---", error);
           return;
@@ -88,14 +88,12 @@ serve(async (req) => {
 
         const uint8Array = new Uint8Array(await fileData.arrayBuffer());
         const chunkSize = 6400; // 200ms
-
-        console.log(`--- [SHOVEL] 📦 Streaming ${uint8Array.length} bytes ---`);
-
         let offset = 0;
+
         const interval = setInterval(() => {
           if (googleSocket.readyState !== WebSocket.OPEN || offset >= uint8Array.length) {
             clearInterval(interval);
-            console.log("--- [SHOVEL] 🏁 Stream complete ---");
+            console.log("--- [SHOVEL] 🏁 Stream End ---");
             return;
           }
 
@@ -108,30 +106,34 @@ serve(async (req) => {
               }]
             }
           }));
-
           offset += chunkSize;
-        }, 200); 
-
+        }, 200);
         return;
       }
 
-      // 2. Log Debug Info (Transcriptions)
-      const aiText = data.server_content?.output_transcription?.text;
-      if (aiText) console.log("--- [AI TEXT] 🧠:", aiText);
+      // Handle Model Responses / Transcriptions
+      if (data.server_content) {
+        if (data.server_content.model_turn) {
+           console.log("--- [AI RESPONSE] 🔊 Audio Chunk Received ---");
+        }
+        if (data.server_content.output_transcription) {
+           console.log("--- [AI TEXT] 🧠:", data.server_content.output_transcription.text);
+        }
+      }
 
-      // 3. Forward message back to client (Frontend)
+      // Relay everything to the frontend
       if (clientSocket.readyState === WebSocket.OPEN) {
-        // Send the raw original data (Google likes strings or binary)
         clientSocket.send(event.data);
       }
     };
 
     googleSocket.onclose = (e) => {
-      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "None"} ---`);
-      clientSocket.close();
+      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "No Reason"} ---`);
     };
 
-    googleSocket.onerror = (err) => console.error("--- [GOOGLE ERROR] ❌ ---", err);
+    googleSocket.onerror = (err) => {
+      console.error("--- [GOOGLE ERROR] ❌ ---", err);
+    };
 
     clientSocket.onclose = () => {
       if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
