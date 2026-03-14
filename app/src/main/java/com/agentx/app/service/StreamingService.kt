@@ -91,35 +91,37 @@ class StreamingService : Service() {
             private fun processIncoming(raw: String) {
                 try {
                     val json = JSONObject(raw)
-                    // Debug Log everything for deep tracing
-                    DebugLogManager.log("RAW_JSON", raw)
-
-                    // WATERFALL PARSING STRATEGY
                     val sc = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
 
-                    // 1. Handle Real-time Transcription (The stuff it's about to say)
+                    // 1. Handle Incremental Speech (Reduced update frequency)
                     val transcription = sc?.optJSONObject("output_transcription")?.optString("text")
                         ?: sc?.optJSONObject("outputTranscription")?.optString("text")
                     
                     if (transcription != null) {
                         speechBuffer.append(transcription)
-                        AgentXAccessibilityService.instance?.updateThought("🗣️ ${speechBuffer.toString()}")
+                        // Only update HUD if we have a significant chunk or space to avoid flicker
+                        if (transcription.contains(" ") || speechBuffer.length > 20) {
+                            AgentXAccessibilityService.instance?.updateThought("🗣️ ${speechBuffer.toString()}")
+                        }
                     }
 
-                    // 2. Handle Model Turn (Text and Thoughts)
+                    // 2. Handle Finalized Turns
                     val mt = sc?.optJSONObject("model_turn") ?: sc?.optJSONObject("modelTurn")
                     val parts = mt?.optJSONArray("parts")
                     if (parts != null) {
-                        // New model response coming in? Clear the incremental speech buffer
                         speechBuffer.setLength(0)
+                        var fullText = ""
+                        var hasThought = false
                         for (i in 0 until parts.length()) {
                             val part = parts.optJSONObject(i)
-                            val isThought = part?.optBoolean("thought") == true
-                            val txt = part?.optString("text") ?: ""
-                            if (txt.isNotEmpty()) {
-                                val prefix = if (isThought) "🤔 " else "🧠 "
-                                AgentXAccessibilityService.instance?.updateThought("$prefix $txt")
-                            }
+                            if (part?.optBoolean("thought") == true) hasThought = true
+                            fullText += part?.optString("text") ?: ""
+                        }
+                        
+                        if (fullText.isNotEmpty()) {
+                            val prefix = if (hasThought) "🤔" else "🧠"
+                            AgentXAccessibilityService.instance?.updateThought("$prefix $fullText")
+                            DebugLogManager.log("AI", fullText)
                         }
                     }
 
@@ -166,7 +168,7 @@ class StreamingService : Service() {
             override fun run() {
                 if (!isRunning) return
                 captureAndSendFrame()
-                handler?.postDelayed(this, 1500)
+                handler?.postDelayed(this, 2500)
             }
         })
 
