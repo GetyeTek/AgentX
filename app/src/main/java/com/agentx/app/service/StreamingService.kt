@@ -37,7 +37,7 @@ class StreamingService : Service() {
     private var handler: Handler? = null
     private var webSocket: WebSocket? = null
     private var isMicEnabled = false
-    private val thoughtBuffer = StringBuilder()
+    private val speechBuffer = StringBuilder()
     
     @Volatile
     private var isRunning = true
@@ -107,16 +107,33 @@ class StreamingService : Service() {
                         }
                     }
 
-                    // 2. Fallback to transcription (user echo)
-                    if (extractedText.isEmpty()) {
-                        extractedText = sc?.optJSONObject("output_transcription")?.optString("text")
-                            ?: sc?.optJSONObject("outputTranscription")?.optString("text") ?: ""
+                    // 2. Handle Real-time Transcription (The stuff it's about to say)
+                    val transcription = sc?.optJSONObject("output_transcription")?.optString("text")
+                        ?: sc?.optJSONObject("outputTranscription")?.optString("text")
+                    
+                    if (transcription != null) {
+                        speechBuffer.append(transcription)
+                        AgentXAccessibilityService.instance?.updateThought("🗣️ ${speechBuffer.toString()}")
                     }
 
-                    if (extractedText.isNotEmpty()) {
-                        DebugLogManager.log("GEMINI", extractedText)
-                        AgentXAccessibilityService.instance?.updateThought("🧠 $extractedText")
-                    } else if (json.has("setup_complete") || json.has("setupComplete")) {
+                    // 3. Handle Model Turn (Text and Thoughts)
+                    val mt = sc?.optJSONObject("model_turn") ?: sc?.optJSONObject("modelTurn")
+                    val parts = mt?.optJSONArray("parts")
+                    if (parts != null) {
+                        // New turn starting? Clear transcription buffer
+                        speechBuffer.setLength(0)
+                        for (i in 0 until parts.length()) {
+                            val part = parts.optJSONObject(i)
+                            val isThought = part?.optBoolean("thought") == true
+                            val txt = part?.optString("text") ?: ""
+                            if (txt.isNotEmpty()) {
+                                val prefix = if (isThought) "🤔 " else "🧠 "
+                                AgentXAccessibilityService.instance?.updateThought("$prefix $txt")
+                            }
+                        }
+                    }
+
+                    if (json.has("setup_complete") || json.has("setupComplete")) {
                         DebugLogManager.log("SYSTEM", "Gemini Setup Confirmed")
                     }
                 } catch (e: Exception) {
