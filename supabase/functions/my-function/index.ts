@@ -16,12 +16,12 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 Edge Function Connected ---");
+    console.log("--- [RELAY] 🟢 STARTING MULTIMODAL SHOVEL ---");
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     googleSocket.onopen = () => {
-      console.log("--- [GOOGLE] 🔵 Sending Setup Message... ---");
+      console.log("--- [GOOGLE] 🔵 Sending Setup... ---");
       googleSocket.send(JSON.stringify({
         setup: {
           model: MODEL,
@@ -29,7 +29,10 @@ serve(async (req) => {
             response_modalities: ["AUDIO"],
             speech_config: { voice_config: { prebuilt_voice_config: { voice_name: "Puck" } } }
           },
-          system_instruction: { parts: [{ text: "You are a helpful AI. Listen to this audio and respond to it." }] },
+          // CRITICAL: Tell the model it has vision in the instructions
+          system_instruction: { 
+            parts: [{ text: "You are a visionary AI. I am sending you both audio and video frames. Describe what you see in the images and relate it to the audio." }] 
+          },
           input_audio_transcription: {},
           output_audio_transcription: {}
         }
@@ -37,113 +40,73 @@ serve(async (req) => {
     };
 
     googleSocket.onmessage = async (event) => {
+      let textContent = (event.data instanceof Blob) ? await event.data.text() : (event.data instanceof ArrayBuffer) ? new TextDecoder().decode(event.data) : event.data;
+      
       let data;
-      let isBinary = false;
-
-      // --- SMART DECODER ---
-      // Try to treat as text first (even if it's a Blob)
-      let textContent = "";
-      if (event.data instanceof Blob) {
-        textContent = await event.data.text();
-      } else if (event.data instanceof ArrayBuffer) {
-        textContent = new TextDecoder().decode(event.data);
-      } else {
-        textContent = event.data;
-      }
-
-      try {
-        data = JSON.parse(textContent);
-      } catch (_e) {
-        // If it's not valid JSON, it's actual raw PCM audio data from the AI
-        isBinary = true;
-      }
-
-      // 1. Handle Raw Audio Binary from AI
-      if (isBinary) {
-        const size = event.data.size || event.data.byteLength || 0;
-        console.log(`--- [GOOGLE] 🔊 Received Raw Audio Bytes: ${size} ---`);
+      try { data = JSON.parse(textContent); } catch { 
+        // If not JSON, it's raw audio from AI, relay to client
         if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(event.data);
-        return;
+        return; 
       }
 
-      // 2. Handle JSON: Setup Completion
-      const isSetupReady = data.setup_complete || data.setupComplete;
-      if (isSetupReady) {
-        console.log("--- [GOOGLE] ✅ Setup Confirmed. Shoveling Audio... ---");
+      if (data.setup_complete || data.setupComplete) {
+        console.log("--- [GOOGLE] ✅ Setup Ready. Starting Audio & Video Shovels... ---");
         
-        const { data: fileData, error } = await supabase.storage.from('Audio').download('audio.pcm');
-        if (error || !fileData) return console.error("--- [STORAGE ERROR] ---", error);
+        // --- 1. THE AUDIO SHOVEL (Already working) ---
+        const { data: audioFile } = await supabase.storage.from('Audio').download('audio.pcm');
+        const audioBytes = new Uint8Array(await audioFile.arrayBuffer());
+        let aOffset = 0;
+        const aInterval = setInterval(() => {
+          if (googleSocket.readyState !== WebSocket.OPEN || aOffset >= audioBytes.length) return clearInterval(aInterval);
+          const chunk = audioBytes.slice(aOffset, aOffset + 6400);
+          googleSocket.send(JSON.stringify({
+            realtime_input: { media_chunks: [{ mime_type: "audio/pcm;rate=16000", data: base64.encode(chunk) }] }
+          }));
+          aOffset += 6400;
+        }, 200);
 
-        const uint8Array = new Uint8Array(await fileData.arrayBuffer());
-        const chunkSize = 6400; // 200ms
-        let offset = 0;
-
-        const interval = setInterval(() => {
-          if (googleSocket.readyState !== WebSocket.OPEN || offset >= uint8Array.length) {
-            clearInterval(interval);
-            console.log("--- [SHOVEL] 🏁 Stream finished. Closing Turn... ---");
-            
-            // Send end-of-turn signal to force AI to respond
-            googleSocket.send(JSON.stringify({
-              client_content: {
-                turns: [{ role: "user", parts: [{ text: "End of audio. Please respond." }] }],
-                turn_complete: true
-              }
-            }));
-            return;
+        // --- 2. THE VIDEO SHOVEL (The New Part) ---
+        // We will loop through 5 frames stored in your bucket
+        let frameNode = 1;
+        const vInterval = setInterval(async () => {
+          if (googleSocket.readyState !== WebSocket.OPEN || frameNode > 5) {
+            if (frameNode > 5) {
+                console.log("--- [VIDEO] 🏁 Sent all 5 frames. ---");
+                // Optional: Send turn complete after video + audio are done
+                googleSocket.send(JSON.stringify({ client_content: { turns: [{ role: "user", parts: [{ text: "I've sent the images and audio. What did you see?" }] }], turn_complete: true } }));
+            }
+            return clearInterval(vInterval);
           }
 
-          const chunk = uint8Array.slice(offset, offset + chunkSize);
-          googleSocket.send(JSON.stringify({
-            realtime_input: {
-              media_chunks: [{
-                mime_type: "audio/pcm;rate=16000",
-                data: base64.encode(chunk)
-              }]
-            }
-          }));
+          console.log(`--- [VIDEO] 📸 Shoveling frame${frameNode}.jpg ---`);
+          const { data: imgData } = await supabase.storage.from('Audio').download(`frame${frameNode}.jpg`);
+          
+          if (imgData) {
+            const imgBytes = new Uint8Array(await imgData.arrayBuffer());
+            googleSocket.send(JSON.stringify({
+              realtime_input: {
+                media_chunks: [{
+                  mime_type: "image/jpeg",
+                  data: base64.encode(imgBytes)
+                }]
+              }
+            }));
+          }
+          frameNode++;
+        }, 1000); // Gemini Live limit is ~1 frame per second
 
-          offset += chunkSize;
-          if (offset % 64000 === 0) console.log(`--- [SHOVEL] 📤 Progress: ${offset} bytes ---`);
-        }, 200);
         return;
       }
 
-      // 3. Handle JSON: Transcriptions & Content
-      const content = data.server_content || data.serverContent;
-      if (content) {
-        const parts = content.model_turn?.parts || content.modelTurn?.parts;
-        if (parts) {
-          parts.forEach(p => {
-            if (p.text) console.log("--- [AI TEXT] 🧠:", p.text);
-            if (p.inline_data || p.inlineData) console.log("--- [AI AUDIO] 🎵: Received Audio Chunk inside JSON");
-          });
-        }
-        const transcript = content.output_transcription?.text || content.outputTranscription?.text;
-        if (transcript) console.log("--- [AI TRANSCRIPT] 💬:", transcript);
-      }
-
-      // 4. Handle JSON: Errors
-      if (data.error) {
-        console.error("--- [GOOGLE ERROR] ❌ ---", JSON.stringify(data.error));
-      }
-
-      // Relay JSON messages to client
-      if (clientSocket.readyState === WebSocket.OPEN) {
-        clientSocket.send(event.data);
-      }
+      // Relay JSON (transcripts, etc.) to client
+      const transcript = data.server_content?.output_transcription?.text || data.serverContent?.outputTranscription?.text;
+      if (transcript) console.log("--- [AI] 💬:", transcript);
+      
+      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(event.data);
     };
 
-    googleSocket.onclose = (e) => {
-      console.warn(`--- [GOOGLE CLOSED] 🚫 Code: ${e.code}, Reason: ${e.reason || "None"} ---`);
-      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.close();
-    };
-
-    googleSocket.onerror = (err) => console.error("--- [GOOGLE WS ERROR] ---", err);
-
-    clientSocket.onclose = () => {
-      if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
-    };
+    googleSocket.onclose = (e) => console.log("Google Closed", e.code);
+    clientSocket.onclose = () => googleSocket.close();
   };
 
   return response;
