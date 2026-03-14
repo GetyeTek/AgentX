@@ -16,12 +16,13 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 Session Active ---");
+    console.log("--- [RELAY] 🟢 Vision-Only Session Started ---");
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // 1. Setup Connection with Vision-Focused Instructions
     googleSocket.onopen = () => {
-      console.log("--- [GOOGLE] 🔵 Sending Setup... ---");
+      console.log("--- [GOOGLE] 🔵 Sending Vision Setup... ---");
       googleSocket.send(JSON.stringify({
         setup: {
           model: MODEL,
@@ -30,19 +31,25 @@ serve(async (req) => {
             speech_config: { voice_config: { prebuilt_voice_config: { voice_name: "Puck" } } }
           },
           system_instruction: { 
-            parts: [{ text: "You are a helpful AI assistant. You will receive 3 images and some audio. Describe the content of the images in detail and respond to the audio." }] 
+            parts: [{ 
+              text: `You are a visual analysis expert. 
+                     IGNORE ALL AUDIO. Even if you hear sounds, do not mention them. 
+                     Describe the images I send in vivid detail. 
+                     When you see a new frame, provide a short, real-time commentary on what you see.` 
+            }] 
           },
-          // Enabling transcriptions so we see text in logs
           input_audio_transcription: {},
           output_audio_transcription: {}
         }
       }));
     };
 
+    // 2. Incoming Message Handler (Waterfall Logic)
     googleSocket.onmessage = async (event) => {
       let data;
       let textContent = "";
 
+      // Decode Binary Frames
       if (event.data instanceof Blob) {
         textContent = await event.data.text();
       } else if (event.data instanceof ArrayBuffer) {
@@ -54,37 +61,30 @@ serve(async (req) => {
       try {
         data = JSON.parse(textContent);
       } catch {
-        // Raw binary audio from AI
-        console.log(`--- [GOOGLE] 🔊 AI is speaking (${event.data.size || event.data.byteLength} bytes) ---`);
+        // Raw AI Audio data (the voice describing the image)
         if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(event.data);
         return;
       }
 
-      // 1. Setup Success Waterfall
+      // Check for Setup Success
       if (data.setup_complete || data.setupComplete) {
-        console.log("--- [GOOGLE] ✅ Setup Ready. Starting Stream... ---");
-        runSession(googleSocket, supabase);
+        console.log("--- [GOOGLE] ✅ Vision Setup Ready. Starting Frame Stream... ---");
+        runVisionOnlyStream(googleSocket, supabase);
         return;
       }
 
-      // 2. Transcription/Text Logic
+      // Log AI visual analysis
       const content = data.server_content || data.serverContent;
       if (content) {
-        const parts = content.model_turn?.parts || content.modelTurn?.parts;
-        if (parts) {
-          parts.forEach(p => {
-            if (p.text) console.log("--- [AI TEXT] 🧠:", p.text);
-          });
-        }
-        const transcript = content.output_transcription?.text || content.outputTranscription?.text;
-        if (transcript) console.log("--- [AI TRANSCRIPT] 💬:", transcript);
+        const text = content.model_turn?.parts?.[0]?.text || content.output_transcription?.text;
+        if (text) console.log("--- [AI VISION ANALYSIS] 👁️:", text);
       }
 
-      // Relay everything else (including potential JSON audio chunks)
+      // Relay everything else to client
       if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(textContent);
     };
 
-    googleSocket.onclose = (e) => console.log("--- [GOOGLE CLOSED] ---", e.code);
+    googleSocket.onclose = (e) => console.warn(`--- [GOOGLE CLOSED] Code: ${e.code} ---`);
     clientSocket.onclose = () => googleSocket.close();
   };
 
@@ -92,55 +92,51 @@ serve(async (req) => {
 });
 
 /**
- * Main Session Logic
- * Sequentially streams data then waits for response
+ * VISION-ONLY STREAMER
+ * Downloads and sends images one by one.
+ * Audio is completely omitted from this logic.
  */
-async function runSession(googleSocket, supabase) {
+async function runVisionOnlyStream(googleSocket, supabase) {
   try {
-    // A. FETCH ASSETS
-    const { data: audioData } = await supabase.storage.from('Audio').download('audio.pcm');
-    const audioBytes = new Uint8Array(await audioData.arrayBuffer());
-
-    // B. START AUDIO (Background Interval)
-    let aOffset = 0;
-    const aInterval = setInterval(() => {
-      if (googleSocket.readyState !== WebSocket.OPEN || aOffset >= audioBytes.length) return clearInterval(aInterval);
-      const chunk = audioBytes.slice(aOffset, aOffset + 6400);
-      googleSocket.send(JSON.stringify({
-        realtime_input: { media_chunks: [{ mime_type: "audio/pcm;rate=16000", data: base64.encode(chunk) }] }
-      }));
-      aOffset += 6400;
-    }, 200);
-
-    // C. START VIDEO (Sequential)
+    console.log("--- [STREAM] 📸 Starting Sequential Vision Stream (3 Frames) ---");
+    
     for (let i = 1; i <= 3; i++) {
       if (googleSocket.readyState !== WebSocket.OPEN) break;
-      const { data: img } = await supabase.storage.from('Audio').download(`frame${i}.jpg`);
-      if (img) {
-        const bytes = new Uint8Array(await img.arrayBuffer());
+
+      console.log(`--- [VIDEO] 📥 Fetching & Sending Frame ${i}... ---`);
+      const { data: imgData, error } = await supabase.storage.from('Audio').download(`frame${i}.jpg`);
+      
+      if (!error && imgData) {
+        const imgBytes = new Uint8Array(await imgData.arrayBuffer());
+        
+        // Send the Image
         googleSocket.send(JSON.stringify({
-          realtime_input: { media_chunks: [{ mime_type: "image/jpeg", data: base64.encode(bytes) }] }
+          realtime_input: {
+            media_chunks: [{
+              mime_type: "image/jpeg",
+              data: base64.encode(imgBytes)
+            }]
+          }
         }));
-        console.log(`--- [STREAM] 📸 Sent Frame ${i} ---`);
+
+        // AUTOMATIC NUDGE: Force Gemini to talk about THIS specific frame immediately
+        googleSocket.send(JSON.stringify({
+          client_content: {
+            turns: [{ role: "user", parts: [{ text: `I just sent frame ${i}. What do you see?` }] }],
+            turn_complete: true
+          }
+        }));
+
+        // Wait 2 seconds between frames to let the AI finish its description
+        await new Promise(r => setTimeout(r, 2000));
       }
-      await new Promise(r => setTimeout(r, 1000));
     }
 
-    // D. THE FINAL NUDGE
-    console.log("--- [STREAM] 🏁 Sending Final Nudge. Waiting for AI... ---");
-    googleSocket.send(JSON.stringify({
-      client_content: {
-        turns: [{ role: "user", parts: [{ text: "Please describe the 3 frames and the audio I just sent." }] }],
-        turn_complete: true
-      }
-    }));
-
-    // E. PERSISTENCE MANTRA
-    // We wait 30 seconds after the nudge to keep the function alive for the AI response
-    await new Promise(r => setTimeout(r, 30000));
-    console.log("--- [RELAY] 🏁 Session Timeout reached. Cleaning up. ---");
+    console.log("--- [STREAM] 🏁 Finished sending images. Waiting 20s for final thoughts... ---");
+    await new Promise(r => setTimeout(r, 20000));
+    console.log("--- [RELAY] 🏁 Session Complete. ---");
 
   } catch (err) {
-    console.error("--- [CRITICAL ERROR] ---", err);
+    console.error("--- [STREAM ERROR] ---", err);
   }
 }
