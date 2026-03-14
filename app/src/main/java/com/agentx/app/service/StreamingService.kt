@@ -85,9 +85,13 @@ class StreamingService : Service() {
                     val transcription = serverContent?.optJSONObject("output_transcription")?.optString("text")
                         ?: serverContent?.optJSONObject("outputTranscription")?.optString("text")
 
+                    // Accumulate or show latest thought
                     val thought = textPart ?: transcription
                     
                     if (!thought.isNullOrEmpty()) {
+                        // Log for the UI log screen specifically
+                        DebugLogManager.log("GEMINI", thought)
+                        
                         val service = AgentXAccessibilityService.instance
                         if (service != null) {
                             service.updateThought("🧠 $thought")
