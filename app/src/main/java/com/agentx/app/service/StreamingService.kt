@@ -63,17 +63,26 @@ class StreamingService : Service() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     val json = JSONObject(text)
-                    val serverContent = json.optJSONObject("server_content")
-                    val modelTurn = serverContent?.optJSONObject("model_turn")
+                    
+                    // WATERFALL: Support both snake_case and CamelCase from Google
+                    val serverContent = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
+                    val modelTurn = serverContent?.optJSONObject("model_turn") ?: serverContent?.optJSONObject("modelTurn")
                     val parts = modelTurn?.optJSONArray("parts")
-                    val thought = parts?.optJSONObject(0)?.optString("text")
+                    
+                    // Check for standard text output OR transcriptions
+                    val textPart = parts?.optJSONObject(0)?.optString("text")
+                    val transcription = serverContent?.optJSONObject("output_transcription")?.optString("text")
+                        ?: serverContent?.optJSONObject("outputTranscription")?.optString("text")
+
+                    val thought = textPart ?: transcription
                     
                     if (!thought.isNullOrEmpty()) {
                         DebugLogManager.log("AI_THOUGHT", thought)
-                        AgentXAccessibilityService.instance?.updateThought(thought)
+                        // Update the floating overlay
+                        AgentXAccessibilityService.instance?.updateThought("AgentX: $thought")
                     }
                 } catch (e: Exception) {
-                    DebugLogManager.log("JSON_ERROR", "Failed to parse: $text | Error: ${e.message}")
+                    // Usually just binary audio frames failing to parse as JSON, which is fine.
                 }
             }
 
@@ -133,10 +142,12 @@ class StreamingService : Service() {
             bitmap.copyPixelsFromBuffer(buffer)
 
             val out = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 70, out)
+            // Dropped to 50 for speed. Gemini doesn't need 4K to see a button.
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 50, out)
             val base64Image = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 
-            val payload = JSONObject().apply {
+            // 1. Send the visual data
+            val imagePayload = JSONObject().apply {
                 put("realtime_input", JSONObject().apply {
                     put("media_chunks", JSONArray().apply {
                         put(JSONObject().apply {
@@ -146,11 +157,27 @@ class StreamingService : Service() {
                     })
                 })
             }
+            webSocket?.send(imagePayload.toString())
 
-            webSocket?.send(payload.toString())
+            // 2. THE NUDGE: Explicitly tell Gemini to look and talk now
+            val nudge = JSONObject().apply {
+                put("client_content", JSONObject().apply {
+                    put("turns", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().apply {
+                                put(JSONObject().apply { put("text", "Analyze this screen.") })
+                            })
+                        })
+                    })
+                    put("turn_complete", true)
+                })
+            }
+            webSocket?.send(nudge.toString())
+
             bitmap.recycle()
         } catch (e: Exception) {
-            e.printStackTrace()
+            DebugLogManager.log("CAPTURE_ERR", "${e.message}")
         } finally {
             image.close()
         }
