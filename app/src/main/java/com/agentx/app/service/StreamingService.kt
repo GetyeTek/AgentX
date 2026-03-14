@@ -37,6 +37,7 @@ class StreamingService : Service() {
     private var handler: Handler? = null
     private var webSocket: WebSocket? = null
     private var isMicEnabled = false
+    private val thoughtBuffer = StringBuilder()
     
     @Volatile
     private var isRunning = true
@@ -89,14 +90,17 @@ class StreamingService : Service() {
                     val thought = textPart ?: transcription
                     
                     if (!thought.isNullOrEmpty()) {
-                        // Log for the UI log screen specifically
+                        // Accumulate thoughts for the HUD
+                        thoughtBuffer.append(thought)
+                        val fullThought = thoughtBuffer.toString().trim()
+
                         DebugLogManager.log("GEMINI", thought)
                         
                         val service = AgentXAccessibilityService.instance
                         if (service != null) {
-                            service.updateThought("🧠 $thought")
+                            service.updateThought("🧠 $fullThought")
                         } else {
-                            DebugLogManager.log("HUD_ERROR", "Accessibility Service not running! Grant permission in Settings.")
+                            DebugLogManager.log("HUD_ERROR", "Accessibility Service not running!")
                         }
                     }
                 } catch (e: Exception) {}
@@ -182,6 +186,9 @@ class StreamingService : Service() {
     }
 
     private fun captureAndSendFrame() {
+        // Clear previous thoughts when a new frame is sent
+        thoughtBuffer.setLength(0)
+        
         val image = imageReader?.acquireLatestImage() ?: return
         try {
             val planes = image.planes
