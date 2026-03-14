@@ -16,18 +16,20 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = async () => {
-    console.log("--- [RELAY] 🟢 STARTING PCM SHOVEL ---");
+    console.log("--- [RELAY] 🟢 SESSION START ---");
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    let isSetupConfirmed = false;
 
     googleSocket.onopen = () => {
-      console.log("--- [GOOGLE] 🔵 Sending Minimal Setup... ---");
-      // FIXED JSON: Removed speech_config, kept response_modalities
+      console.log("--- [GOOGLE] 🔵 Socket Connected. Sending Setup... ---");
+      // FIXED SETUP: Based on working Python template logic
       googleSocket.send(JSON.stringify({
         setup: {
           model: MODEL,
           generation_config: { 
-            response_modalities: ["AUDIO", "TEXT"] 
+            // The preview model prefers just AUDIO as the response modality
+            response_modalities: ["AUDIO"] 
           }
         }
       }));
@@ -37,7 +39,8 @@ serve(async (req) => {
       const data = JSON.parse(event.data);
 
       if (data.setup_complete) {
-        console.log("--- [GOOGLE] ✅ Setup Ready. Fetching audio.pcm... ---");
+        console.log("--- [GOOGLE] ✅ Setup Confirmed! Downloading audio.pcm... ---");
+        isSetupConfirmed = true;
         
         const { data: fileData, error } = await supabase.storage.from('Audio').download('audio.pcm');
         if (error || !fileData) {
@@ -46,7 +49,7 @@ serve(async (req) => {
         }
 
         const uint8Array = new Uint8Array(await fileData.arrayBuffer());
-        const chunkSize = 3200; // 100ms
+        const chunkSize = 3200; // 100ms of PCM
 
         console.log(`--- [SHOVEL] 📦 Streaming ${uint8Array.length} bytes ---`);
 
@@ -55,17 +58,17 @@ serve(async (req) => {
 
           const chunk = uint8Array.slice(i, i + chunkSize);
           
-          // Sending only media_chunks. 
-          // If this still fails with 1007, the binary data in the PCM is the suspect.
           googleSocket.send(JSON.stringify({
             realtime_input: {
               media_chunks: [{
-                mime_type: "audio/pcm;rate=16000",
+                // FIXED MIME: Just 'audio/pcm', no rate string
+                mime_type: "audio/pcm",
                 data: base64.encode(chunk)
               }]
             }
           }));
 
+          // Pacing: exactly 100ms
           await new Promise(r => setTimeout(r, 100)); 
         }
         
@@ -73,10 +76,7 @@ serve(async (req) => {
         return;
       }
 
-      // Log AI thoughts to console
-      const text = data.server_content?.model_turn?.parts?.[0]?.text;
-      if (text) console.log("--- [AI RESPONSE] 🧠:", text);
-
+      // Relay Gemini's audio responses back to the client (Android/Browser)
       if (clientSocket.readyState === WebSocket.OPEN) {
         clientSocket.send(event.data);
       }
@@ -87,7 +87,11 @@ serve(async (req) => {
     };
 
     googleSocket.onerror = (err) => console.error("Google Error", err);
-    clientSocket.onclose = () => { if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close(); };
+    
+    clientSocket.onclose = () => {
+        console.log("--- [CLIENT] ⚪ Disconnected ---");
+        if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
+    };
   };
 
   return response;
