@@ -88,7 +88,12 @@ class StreamingService : Service() {
                     val thought = textPart ?: transcription
                     
                     if (!thought.isNullOrEmpty()) {
-                        AgentXAccessibilityService.instance?.updateThought("🧠 $thought")
+                        val service = AgentXAccessibilityService.instance
+                        if (service != null) {
+                            service.updateThought("🧠 $thought")
+                        } else {
+                            DebugLogManager.log("HUD_ERROR", "Accessibility Service not running! Grant permission in Settings.")
+                        }
                     }
                 } catch (e: Exception) {}
             }
@@ -181,15 +186,18 @@ class StreamingService : Service() {
             val rowStride = planes[0].rowStride
             val rowPadding = rowStride - pixelStride * image.width
 
-            val bitmap = Bitmap.createBitmap(
+            // Create bitmap with correct padding
+            val fullBitmap = Bitmap.createBitmap(
                 image.width + rowPadding / pixelStride,
                 image.height, Bitmap.Config.ARGB_8888
             )
-            bitmap.copyPixelsFromBuffer(buffer)
+            fullBitmap.copyPixelsFromBuffer(buffer)
+
+            // Crop the bitmap to remove padding artifacts
+            val cleanBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, image.width, image.height)
 
             val out = ByteArrayOutputStream()
-            // Dropped to 50 for speed. Gemini doesn't need 4K to see a button.
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 50, out)
+            cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 50, out)
             val base64Image = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 
             // 1. Send the visual data
@@ -221,7 +229,9 @@ class StreamingService : Service() {
             }
             webSocket?.send(nudge.toString())
 
-            bitmap.recycle()
+            // Clean up both bitmaps to prevent memory leaks
+            fullBitmap.recycle()
+            cleanBitmap.recycle()
         } catch (e: Exception) {
             DebugLogManager.log("CAPTURE_ERR", "${e.message}")
         } finally {
