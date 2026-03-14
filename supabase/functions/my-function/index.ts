@@ -16,13 +16,12 @@ serve(async (req) => {
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 Multimodal Session Start ---");
+    console.log("--- [RELAY] 🟢 Edge Function Connected ---");
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // 1. Connection Setup
     googleSocket.onopen = () => {
-      console.log("--- [GOOGLE] 🔵 Sending Multimodal Setup... ---");
+      console.log("--- [GOOGLE] 🔵 Sending Setup... ---");
       googleSocket.send(JSON.stringify({
         setup: {
           model: MODEL,
@@ -31,7 +30,7 @@ serve(async (req) => {
             speech_config: { voice_config: { prebuilt_voice_config: { voice_name: "Puck" } } }
           },
           system_instruction: { 
-            parts: [{ text: "You are looking at video frames and listening to audio. Please describe the visuals in detail and respond to the audio." }] 
+            parts: [{ text: "You are a helpful AI with vision. Describe the images I send and summarize the audio." }] 
           },
           input_audio_transcription: {},
           output_audio_transcription: {}
@@ -39,32 +38,35 @@ serve(async (req) => {
       }));
     };
 
-    // 2. The Message Handler (Heavy Debugging)
     googleSocket.onmessage = async (event) => {
       let data;
-      let isBinary = false;
+      let textContent = "";
 
-      // Handle binary (audio chunks) or JSON
+      // Decode binary frames to text for JSON checking
       if (event.data instanceof Blob) {
-        const text = await event.data.text();
-        try { data = JSON.parse(text); } catch { isBinary = true; }
+        textContent = await event.data.text();
+      } else if (event.data instanceof ArrayBuffer) {
+        textContent = new TextDecoder().decode(event.data);
       } else {
-        try { data = JSON.parse(event.data); } catch { isBinary = true; }
+        textContent = event.data;
       }
 
-      if (isBinary) {
-        // This is actual AI Voice speaking
+      try {
+        data = JSON.parse(textContent);
+      } catch {
+        // If not JSON, it's raw audio bytes from Gemini
         if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(event.data);
         return;
       }
 
-      // --- WATERFALL: LOG EVERYTHING ---
+      // 1. Setup Waterfall
       if (data.setup_complete || data.setupComplete) {
-        console.log("--- [GOOGLE] ✅ Setup Ready. Starting Serial Shovel ---");
-        startMultimodalShovel(googleSocket, supabase);
+        console.log("--- [GOOGLE] ✅ Setup Ready. Starting Pre-loaded Shovel ---");
+        runPreloadedShovel(googleSocket, supabase);
         return;
       }
 
+      // 2. Response Waterfall (Logs everything the AI says)
       const content = data.server_content || data.serverContent;
       if (content) {
         const parts = content.model_turn?.parts || content.modelTurn?.parts;
@@ -77,30 +79,43 @@ serve(async (req) => {
         if (transcript) console.log("--- [AI TRANSCRIPT] 💬:", transcript);
       }
 
-      if (data.error) console.error("--- [GOOGLE ERROR] ---", data.error);
+      if (data.error) console.error("--- [GOOGLE ERROR] ---", JSON.stringify(data.error));
 
-      // Relay JSON to client
-      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(JSON.stringify(data));
+      // Relay JSON back to client
+      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(textContent);
     };
 
-    googleSocket.onclose = (e) => console.log("--- [GOOGLE CLOSED] ---", e.code, e.reason);
+    googleSocket.onclose = (e) => console.log("--- [GOOGLE CLOSED] ---", e.code);
   };
 
   return response;
 });
 
 /**
- * Serial Shoveler: Ensures downloads and sends happen in order 
- * to prevent the 'Silent Hang' caused by overlapping intervals.
+ * PRE-LOADED SHOVEL: Downloads all assets first to avoid I/O blocking
  */
-async function startMultimodalShovel(googleSocket, supabase) {
+async function runPreloadedShovel(googleSocket, supabase) {
   try {
-    // A. FETCH THE FILES ONCE
-    console.log("--- [SHOVEL] 📥 Downloading Assets... ---");
-    const { data: audioData } = await supabase.storage.from('Audio').download('audio.pcm');
-    const audioBytes = new Uint8Array(await audioData.arrayBuffer());
+    console.log("--- [PRE-LOAD] 📥 Downloading 3 frames + audio... ---");
+    
+    // Download everything in parallel
+    const [audioRes, f1, f2, f3] = await Promise.all([
+      supabase.storage.from('Audio').download('audio.pcm'),
+      supabase.storage.from('Audio').download('frame1.jpg'),
+      supabase.storage.from('Audio').download('frame2.jpg'),
+      supabase.storage.from('Audio').download('frame3.jpg')
+    ]);
 
-    // B. START AUDIO LOOP (Async but controlled)
+    const audioBytes = new Uint8Array(await audioRes.data.arrayBuffer());
+    const frames = [
+      base64.encode(new Uint8Array(await f1.data.arrayBuffer())),
+      base64.encode(new Uint8Array(await f2.data.arrayBuffer())),
+      base64.encode(new Uint8Array(await f3.data.arrayBuffer()))
+    ];
+
+    console.log("--- [SHOVEL] 🚀 Assets Ready. Starting Stream... ---");
+
+    // Audio Interval (Snake Case works here)
     let aOffset = 0;
     const aInterval = setInterval(() => {
       if (googleSocket.readyState !== WebSocket.OPEN || aOffset >= audioBytes.length) return clearInterval(aInterval);
@@ -111,35 +126,26 @@ async function startMultimodalShovel(googleSocket, supabase) {
       aOffset += 6400;
     }, 200);
 
-    // C. START VIDEO LOOP (Serial for stability)
-    for (let frame = 1; frame <= 5; frame++) {
+    // Video Loop (Serial)
+    for (let i = 0; i < frames.length; i++) {
       if (googleSocket.readyState !== WebSocket.OPEN) break;
-      
-      console.log(`--- [VIDEO] 📸 Sending frame${frame}.jpg ---`);
-      const { data: imgData } = await supabase.storage.from('Audio').download(`frame${frame}.jpg`);
-      
-      if (imgData) {
-        const imgBytes = new Uint8Array(await imgData.arrayBuffer());
-        googleSocket.send(JSON.stringify({
-          realtime_input: { media_chunks: [{ mime_type: "image/jpeg", data: base64.encode(imgBytes) }] }
-        }));
-      }
-      
-      // Wait exactly 1 second before the next frame (Gemini limit)
+      console.log(`--- [VIDEO] 📸 Sending Frame ${i+1} ---`);
+      googleSocket.send(JSON.stringify({
+        realtime_input: { media_chunks: [{ mime_type: "image/jpeg", data: frames[i] }] }
+      }));
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    console.log("--- [SHOVEL] 🏁 Frames sent. Finalizing turn. ---");
-    
-    // D. TRIGGER THE RESPONSE
+    // FINAL NUDGE: Use both naming conventions to be safe
+    console.log("--- [SHOVEL] 🏁 Finalizing Turn ---");
     googleSocket.send(JSON.stringify({
-      client_content: {
-        turns: [{ role: "user", parts: [{ text: "I have sent you the visuals and the audio. What is happening in the video?" }] }],
-        turn_complete: true
+      clientContent: {
+        turns: [{ role: "user", parts: [{ text: "Describe the images and the audio I just sent." }] }],
+        turnComplete: true
       }
     }));
 
   } catch (err) {
-    console.error("--- [SHOVEL ERROR] ---", err);
+    console.error("--- [CRITICAL SHOVEL ERROR] ---", err);
   }
 }
