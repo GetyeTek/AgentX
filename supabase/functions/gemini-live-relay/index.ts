@@ -1,6 +1,11 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL") ?? "",
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+);
 const MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025";
 const GOOGLE_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
 
@@ -87,18 +92,28 @@ serve(async (req) => {
     clientSocket.onmessage = (event) => {
       if (googleSocket.readyState !== WebSocket.OPEN) return;
       
-      // Android is already sending JSON strings with Base64 media chunks
-      // We just log the activity and pass it through
       try {
         if (typeof event.data === "string") {
            const parsed = JSON.parse(event.data);
-           if (parsed.realtime_input) {
-              const mime = parsed.realtime_input.media_chunks?.[0]?.mime_type;
-              const size = parsed.realtime_input.media_chunks?.[0]?.data?.length;
-              console.log(`--- [CLIENT] 📤 Sending ${mime} (${size} base64 chars) ---`);
+           const chunk = parsed.realtime_input?.media_chunks?.[0];
+           
+           if (chunk?.mime_type === "image/jpeg") {
+              const base64Data = chunk.data;
+              const fileName = `debug_${Date.now()}.jpg`;
+              
+              // Fire and forget upload to not block the AI pipe
+              (async () => {
+                const binary = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+                const { error } = await supabase.storage.from("Audio").upload(fileName, binary, {
+                  contentType: 'image/jpeg',
+                  upsert: true
+                });
+                if (error) console.error("--- [STORAGE ERROR] ---", error.message);
+                else console.log(`--- [DEBUG] Frame saved: ${fileName} ---`);
+              })();
            }
         }
-      } catch (_e) { /* Non-JSON traffic */ }
+      } catch (_e) { /* Ignore non-JSON or parsing errors */ }
 
       googleSocket.send(event.data);
     };
