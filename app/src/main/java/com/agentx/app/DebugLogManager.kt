@@ -14,7 +14,7 @@ object DebugLogManager {
         val timestamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
         val entry = "[$timestamp] $tag: $message"
         val current = _logs.value.toMutableList()
-        if (current.size > 200) current.removeAt(0)
+        if (current.size > 50) current.removeAt(0)
         current.add(entry)
         _logs.value = current
     }
