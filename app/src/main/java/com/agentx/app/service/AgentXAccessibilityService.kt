@@ -37,10 +37,13 @@ class AgentXAccessibilityService : AccessibilityService() {
 
         // Basic overlay layout - using a simple TextView programmatically for now
         thoughtText = TextView(this).apply {
-            setBackgroundColor(0xAA000000.toInt())
-            setTextColor(0xFFFFFFFF.toInt())
-            setPadding(20, 50, 20, 20)
-            text = "AgentX: Watching..."
+            // HUD STYLING
+            setBackgroundResource(android.R.drawable.toast_frame)
+            backgroundTintList = android.content.res.ColorStateList.valueOf(0xCC000000.toInt())
+            setTextColor(0xFF00FF00.toInt()) // Sci-fi Green
+            textSize = 14f
+            setPadding(30, 30, 30, 30)
+            text = "AgentX: Initializing..."
         }
         
         wm?.addView(thoughtText, params)
