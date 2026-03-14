@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+// FIXED: Changed supabase-client to supabase-js
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
@@ -10,14 +11,27 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "
 
 serve(async (req) => {
   const upgrade = req.headers.get("upgrade") || "";
-  if (upgrade.toLowerCase() != "websocket") return new Response("Not a websocket request", { status: 426 });
+  if (upgrade.toLowerCase() != "websocket") {
+    return new Response("Not a websocket request", { status: 426 });
+  }
 
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
   clientSocket.onopen = async () => {
     console.log("--- [RELAY] 🟢 SESSION START ---");
+    
+    if (!GEMINI_API_KEY) {
+      console.error("--- [ERROR] 🔴 MISSING GEMINI_API_KEY ---");
+      return;
+    }
+
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    const cleanup = () => {
+      if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
+      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.close();
+    };
 
     googleSocket.onopen = () => {
       console.log("--- [GOOGLE] 🔵 Handshaking... ---");
@@ -25,7 +39,9 @@ serve(async (req) => {
         setup: {
           model: MODEL,
           generation_config: { response_modalities: ["TEXT"] },
-          system_instruction: { parts: [{ text: "You are an audio analyzer. Tell me exactly what you hear in this file." }] }
+          system_instruction: { 
+            parts: [{ text: "You are an audio analyzer. Tell me exactly what you hear in this file." }] 
+          }
         }
       }));
     };
@@ -36,7 +52,12 @@ serve(async (req) => {
       if (data.setup_complete) {
         console.log("--- [GOOGLE] ✅ Setup Ready. Fetching audio.pcm... ---");
         
-        const { data: fileData, error } = await supabase.storage.from('Audio').download('audio.pcm');
+        // 1. Download the file
+        const { data: fileData, error } = await supabase
+          .storage
+          .from('Audio')
+          .download('audio.pcm');
+
         if (error || !fileData) {
           console.error("--- [STORAGE ERROR] ❌ ---", error);
           return;
@@ -45,8 +66,7 @@ serve(async (req) => {
         const uint8Array = new Uint8Array(await fileData.arrayBuffer());
         console.log(`--- [SHOVEL] 📦 Streaming ${uint8Array.length} bytes of PCM ---`);
 
-        // MATH: 16000Hz * 16-bit(2 bytes) = 32,000 bytes per second.
-        // We send 3200 bytes (100ms of audio) every 100ms.
+        // 2. Shovel loop (100ms chunks)
         const chunkSize = 3200; 
         for (let i = 0; i < uint8Array.length; i += chunkSize) {
           if (googleSocket.readyState !== WebSocket.OPEN) break;
@@ -63,24 +83,31 @@ serve(async (req) => {
             }
           }));
 
-          // Wait exactly 100ms to simulate real-time talking
+          // Simulate real-time speed
           await new Promise(r => setTimeout(r, 100)); 
         }
         
-        console.log("--- [SHOVEL] 🏁 Finished ---");
+        console.log("--- [SHOVEL] 🏁 Finished sending file ---");
         return;
       }
 
+      // Log AI responses
       if (data.server_content?.model_turn?.parts?.[0]?.text) {
         console.log("--- [AI RESPONSE] 🧠:", data.server_content.model_turn.parts[0].text);
       }
-      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(event.data);
+
+      if (clientSocket.readyState === WebSocket.OPEN) {
+        clientSocket.send(event.data);
+      }
     };
 
-    googleSocket.onclose = (e) => console.warn(`--- [GOOGLE CLOSED] 🚫 ${e.code}: ${e.reason} ---`);
-    clientSocket.onclose = () => {
-        if (googleSocket.readyState === WebSocket.OPEN) googleSocket.close();
+    googleSocket.onclose = (e) => {
+      console.warn(`--- [GOOGLE CLOSED] 🚫 ${e.code}: ${e.reason} ---`);
+      cleanup();
     };
+
+    googleSocket.onerror = (err) => console.error("Google Error", err);
+    clientSocket.onclose = () => cleanup();
   };
 
   return response;
