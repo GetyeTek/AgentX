@@ -96,18 +96,8 @@ class StreamingService : Service() {
 
                     // WATERFALL PARSING STRATEGY
                     val sc = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
-                    
-                    // 1. Try to find model text parts (streaming response)
-                    val mt = sc?.optJSONObject("model_turn") ?: sc?.optJSONObject("modelTurn")
-                    val parts = mt?.optJSONArray("parts")
-                    var extractedText = ""
-                    if (parts != null) {
-                        for (i in 0 until parts.length()) {
-                            extractedText += parts.optJSONObject(i)?.optString("text") ?: ""
-                        }
-                    }
 
-                    // 2. Handle Real-time Transcription (The stuff it's about to say)
+                    // 1. Handle Real-time Transcription (The stuff it's about to say)
                     val transcription = sc?.optJSONObject("output_transcription")?.optString("text")
                         ?: sc?.optJSONObject("outputTranscription")?.optString("text")
                     
@@ -116,11 +106,11 @@ class StreamingService : Service() {
                         AgentXAccessibilityService.instance?.updateThought("🗣️ ${speechBuffer.toString()}")
                     }
 
-                    // 3. Handle Model Turn (Text and Thoughts)
+                    // 2. Handle Model Turn (Text and Thoughts)
                     val mt = sc?.optJSONObject("model_turn") ?: sc?.optJSONObject("modelTurn")
                     val parts = mt?.optJSONArray("parts")
                     if (parts != null) {
-                        // New turn starting? Clear transcription buffer
+                        // New model response coming in? Clear the incremental speech buffer
                         speechBuffer.setLength(0)
                         for (i in 0 until parts.length()) {
                             val part = parts.optJSONObject(i)
@@ -216,7 +206,7 @@ class StreamingService : Service() {
 
     private fun captureAndSendFrame() {
         // Clear previous thoughts when a new frame is sent
-        thoughtBuffer.setLength(0)
+        speechBuffer.setLength(0)
         
         val image = imageReader?.acquireLatestImage() ?: return
         try {
