@@ -53,26 +53,34 @@ async function runTest() {
             console.log("--- [INCOMING] ---", JSON.stringify(parsed, (k,v) => k === 'data' ? '[BINARY]' : v, 2));
 
             if (parsed.setupComplete || parsed.setup_complete) {
-                console.log("--- [STEP 4] Setup Confirmed. Sending Full Atomic Multimodal Turn... ---");
+                console.log("--- [STEP 4] Setup Confirmed. Starting Delayed Injection... ---");
                 
-                const parts = [
-                    { text: "CRITICAL TEST: I am providing an image AND an audio clip. You MUST transcribe the audio and describe the image. If you say audio is missing, you fail the test." },
-                    { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-                ];
-
+                // 1. Send Audio through the EAR pipe (Streaming)
                 if (base64Audio) {
-                    console.log("--- [INFO] Embedding Audio into Turn Parts ---");
-                    // We move audio from realtime_input to inline_data to ensure it's seen with the image
-                    parts.push({ inline_data: { mime_type: "audio/pcm;rate=16000", data: base64Audio } });
+                    console.log("--- [INFO] Streaming Audio to buffer... ---");
+                    ws.send(JSON.stringify({
+                        realtime_input: { media_chunks: [{ mime_type: "audio/pcm;rate=16000", data: base64Audio }] }
+                    }));
                 }
 
-                ws.send(JSON.stringify({
-                    client_content: {
-                        turns: [{ role: "user", parts: parts }],
-                        turn_complete: true
-                    }
-                }));
-                console.log("--- [STEP 5] Atomic Turn Sent. Waiting for transcription and description... ---");
+                // 2. WAIT 2 SECONDS (The Brain Buffer)
+                console.log("--- [INFO] Waiting 2s for audio buffer to settle... ---");
+                setTimeout(() => {
+                    console.log("--- [STEP 5] Sending Vision Turn... ---");
+                    ws.send(JSON.stringify({
+                        client_content: {
+                            turns: [{
+                                role: "user",
+                                parts: [
+                                    { text: "Listen to the audio I streamed and describe this image. Transcribe the audio exactly." },
+                                    { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+                                ]
+                            }],
+                            turn_complete: true
+                        }
+                    }));
+                    console.log("--- [INFO] Multimodal request complete. Waiting for AI response... ---");
+                }, 2000);
             }
 
             if (parsed.serverContent?.modelTurn || parsed.serverContent?.outputTranscription) {
