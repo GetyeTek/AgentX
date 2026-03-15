@@ -39,7 +39,12 @@ serve(async (req) => {
     }
 
     const arrayBuffer = await blob.arrayBuffer();
-    const base64Image = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    const uint8 = new Uint8Array(arrayBuffer);
+    let binary = "";
+    for (let i = 0; i < uint8.length; i++) {
+      binary += String.fromCharCode(uint8[i]);
+    }
+    const base64Image = btoa(binary);
 
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
 
