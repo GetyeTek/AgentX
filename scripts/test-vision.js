@@ -6,20 +6,29 @@ async function runTest() {
     const MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
     const URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${process.env.GEMINI_API_KEY}`;
 
-    console.log("--- [STEP 1] Fetching latest image and audio.pcm ---");
-    const { data: files } = await supabase.storage.from('Audio').list('', { limit: 1, sortBy: { column: 'created_at', order: 'desc' } });
-    if (!files || files.length === 0) throw new Error("No images found!");
+    console.log("--- [STEP 1] Fetching target files ---");
+    const { data: files } = await supabase.storage.from('Audio').list();
+    
+    // Filter to find the latest JPEG/PNG that IS NOT audio.pcm
+    const imageFile = files
+        .filter(f => f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg'))
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
 
-    // 1. Download Latest Image
-    const { data: imgBlob } = await supabase.storage.from('Audio').download(files[0].name);
+    if (!imageFile) throw new Error("No JPEG images found in 'Audio' bucket!");
+    console.log(`--- [INFO] Using Image: ${imageFile.name} ---`);
+
+    const { data: imgBlob } = await supabase.storage.from('Audio').download(imageFile.name);
     const base64Image = Buffer.from(await imgBlob.arrayBuffer()).toString('base64');
 
-    // 2. Download audio.pcm
     const { data: audioBlob, error: audioErr } = await supabase.storage.from('Audio').download('audio.pcm');
-    if (audioErr) console.warn("--- [WARN] audio.pcm not found, proceeding with image only ---");
-    const base64Audio = audioBlob ? Buffer.from(await audioBlob.arrayBuffer()).toString('base64') : null;
+    let base64Audio = null;
+    if (audioErr) {
+        console.warn("--- [WARN] audio.pcm missing from bucket ---");
+    } else {
+        base64Audio = Buffer.from(await audioBlob.arrayBuffer()).toString('base64');
+    }
     
-    console.log(`--- [STEP 2] Encoded Image (${base64Image.length}) and Audio (${base64Audio?.length || 0}) ---`);
+    console.log(`--- [STEP 2] Image (${base64Image.length}) | Audio (${base64Audio?.length || 0}) ---`);
 
     const ws = new WebSocket(URL);
 
@@ -28,8 +37,11 @@ async function runTest() {
         const setup = {
             setup: {
                 model: MODEL,
-                generation_config: { response_modalities: ["TEXT"] },
-                system_instruction: { parts: [{ text: "You are AgentX. You are a multimodal expert. You will receive an image and an audio file. Describe the image and transcribe the audio perfectly." }] }
+                generation_config: { 
+                    response_modalities: ["AUDIO"], // MUST be AUDIO for the Bidi pipe to accept PCM input
+                    speech_config: { voice_config: { prebuilt_voice_config: { voice_name: "Puck" } } }
+                },
+                system_instruction: { parts: [{ text: "You are AgentX. You are a multimodal expert. Listen to the audio and look at the image. Respond via voice." }] }
             }
         };
         ws.send(JSON.stringify(setup));
