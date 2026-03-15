@@ -21,16 +21,26 @@ async function runTest() {
     const base64Image = Buffer.from(await imgBlob.arrayBuffer()).toString('base64');
 
     const { data: audioBlob, error: audioErr } = await supabase.storage.from('Audio').download('audio.pcm');
-    let audioBuffer = null;
+    let base64Audio = null;
     if (audioErr) {
         console.warn("--- [WARN] audio.pcm missing ---");
     } else {
-        audioBuffer = Buffer.from(await audioBlob.arrayBuffer());
-        if (audioBuffer.slice(0, 4).toString() === 'RIFF') {
-            console.error("--- [FATAL] audio.pcm HAS A WAV HEADER. Google needs RAW PCM. ---");
-            process.exit(1);
+        const buffer = Buffer.from(await audioBlob.arrayBuffer());
+        
+        // SANITY CHECK 1: File Header
+        const header = buffer.slice(0, 4).toString('ascii');
+        if (header === 'RIFF' || header === 'WAVE') {
+            throw new Error("FATAL: audio.pcm is actually a WAV file! Gemini Live requires RAW PCM. Strip the header first.");
         }
+
+        // SANITY CHECK 2: Duration
+        const durationSec = buffer.length / 32000;
+        console.log(`--- [SANITY] Audio length: ${durationSec.toFixed(2)} seconds ---`);
+        
+        base64Audio = buffer.toString('base64');
     }
+    
+    console.log(`--- [STEP 2] Image (${base64Image.length} chars) | Audio (${base64Audio?.length || 0} chars) ---`);
     
     console.log(`--- [STEP 2] Image (${base64Image.length} chars) | Audio (${audioBuffer?.length || 0} bytes) ---`);
     console.log(`--- [STEP 2] Files Ready. Initializing SDK Session... ---`);
@@ -84,10 +94,23 @@ async function runTest() {
     session.sendRealtimeInput([{ data: base64Image, mimeType: 'image/jpeg' }]);
 
     console.log("--- [STEP 5] Sending Final Nudge... ---");
-    session.sendClientContent({
-        turns: [{ role: 'user', parts: [{ text: "Transcribe that audio clip and describe my screen." }] }],
-        turnComplete: true
-    });
+                // 2. WAIT FOR PROCESSING (Calculated delay)
+                const waitTime = 5000; 
+                console.log(`--- [INFO] Waiting ${waitTime/1000}s for AI to digest the stream... ---`);
+                
+                setTimeout(() => {
+                    console.log("--- [STEP 5] Sending Final Atomic Turn... ---");
+                    session.sendClientContent({
+                        turns: [{
+                            role: "user",
+                            parts: [
+                                { text: "What did the audio say about Firebase and Supabase? Also describe the screen." }
+                            ]
+                        }],
+                        turnComplete: true
+                    });
+                    console.log("--- [INFO] Request complete. Waiting for AI to prove it has ears... ---");
+                }, waitTime);
 
     setTimeout(() => { console.log("--- [TIMEOUT] ---"); process.exit(1); }, 60000);
 }
