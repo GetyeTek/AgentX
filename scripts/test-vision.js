@@ -38,10 +38,12 @@ async function runTest() {
             setup: {
                 model: MODEL,
                 generation_config: { 
-                    response_modalities: ["AUDIO"], // MUST be AUDIO for the Bidi pipe to accept PCM input
+                    response_modalities: ["AUDIO"],
                     speech_config: { voice_config: { prebuilt_voice_config: { voice_name: "Puck" } } }
                 },
-                system_instruction: { parts: [{ text: "You are AgentX. You are a multimodal expert. Listen to the audio and look at the image. Respond via voice." }] }
+                // Enabling transcription often stabilizes the Bidi pipe for PCM input
+                input_audio_transcription: {},
+                system_instruction: { parts: [{ text: "You are AgentX. Multimodal expert. Listen to the audio and describe the image. If you hear a command in the audio, follow it." }] }
             }
         };
         ws.send(JSON.stringify(setup));
@@ -56,25 +58,37 @@ async function runTest() {
             // Only log the structure, not the giant binary fields if they exist
             console.log(JSON.stringify(parsed, (k,v) => k === 'data' ? '[BINARY_DATA]' : v, 2));
 
-            if (parsed.setupComplete || parsed.setup_complete) {
-                console.log("--- [STEP 4] Setup Confirmed. Building Multi-part Payload... ---");
-                
-                const parts = [
-                    { text: "Analyze this screen and transcribe the audio clip." },
-                    { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-                ];
-
-                if (base64Audio) {
-                    console.log("--- [INFO] Including Audio Part ---");
-                    parts.push({ inline_data: { mime_type: "audio/pcm;rate=16000", data: base64Audio } });
-                }
-
+        if (parsed.setupComplete) {
+            console.log("--- [STEP 4] Setup Confirmed. Sending Hybrid Payload... ---");
+            
+            if (base64Audio) {
+                console.log("--- [INFO] Streaming Audio via realtime_input... ---");
                 ws.send(JSON.stringify({
-                    client_content: {
-                        turns: [{ role: "user", parts: parts }],
-                        turn_complete: true
+                    realtime_input: {
+                        media_chunks: [{
+                            mime_type: "audio/pcm;rate=16000",
+                            data: base64Audio
+                        }]
                     }
                 }));
+            }
+
+            console.log("--- [INFO] Injecting Image via client_content turn... ---");
+            ws.send(JSON.stringify({
+                client_content: {
+                    turns: [{
+                        role: "user",
+                        parts: [
+                            { text: "Listen to the audio I just streamed and look at this image. Transcribe the audio and describe the image." },
+                            { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+                        ]
+                    }],
+                    turn_complete: true
+                }
+            }));
+            
+            console.log("--- [STEP 5] Hybrid Payload Sent. Waiting for AI response... ---");
+        }
                 console.log("--- [STEP 5] Atomic Turn Sent. Waiting for AI response... ---");
             }
 
