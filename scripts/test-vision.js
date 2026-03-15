@@ -36,16 +36,24 @@ async function runTest() {
         
         const parsed = JSON.parse(raw);
         if (parsed.setupComplete) {
-            console.log("--- [STEP 4] Setup Confirmed. Injecting Media... ---");
-            ws.send(JSON.stringify({
-                realtime_input: { media_chunks: [{ mime_type: "image/jpeg", data: base64Image }] }
-            }));
-            ws.send(JSON.stringify({
+            console.log("--- [STEP 4] Setup Confirmed. Injecting Image into Turn... ---");
+            
+            // We bypass realtime_input and put the image DIRECTLY in the turn parts.
+            // This forces the model to treat the image and text as a single unit.
+            const payload = {
                 client_content: {
-                    turns: [{ role: "user", parts: [{ text: "Look at the screen and describe it now." }] }],
+                    turns: [{
+                        role: "user",
+                        parts: [
+                            { text: "Describe this image in extreme detail. What apps, colors, or text do you see?" },
+                            { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+                        ]
+                    }],
                     turn_complete: true
                 }
-            }));
+            };
+
+            ws.send(JSON.stringify(payload));
         }
     });
 
