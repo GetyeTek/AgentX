@@ -76,17 +76,16 @@ async function runTest() {
         console.log("--- [INFO] Audio streaming complete. ---");
     }
 
-    console.log("--- [STEP 4] Sending Atomic Vision + Prompt ---");
-    // We wait 2 seconds after the stream ends to ensure buffer processing
-    await new Promise(r => setTimeout(r, 2000));
+    console.log("--- [STEP 4] Injecting Image via Realtime Pipe... ---");
+    session.sendRealtimeInput([{ data: base64Image, mimeType: 'image/jpeg' }]);
 
+    // Wait 1s for the image to be processed by the vision encoder
+    await new Promise(r => setTimeout(r, 1000));
+
+    console.log("--- [STEP 5] Sending Text Command (No Media)... ---");
     session.sendClientContent({
         turns: [{
-            role: 'user',
-            parts: [
-                { text: "Listen to that audio I just streamed. What did it say about Firebase pricing? Also, describe this screen." },
-                { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
-            ]
+            parts: [{ text: "Look at the screen I just sent and listen to the audio stream. What was said about Firebase vs Supabase pricing? Describe the app UI as well." }]
         }],
         turnComplete: true
     });
