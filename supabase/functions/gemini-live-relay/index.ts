@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { encode as base64Encode } from "https://deno.land/std@0.177.0/encoding/base64.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const supabase = createClient(
@@ -39,12 +40,8 @@ serve(async (req) => {
     }
 
     const arrayBuffer = await blob.arrayBuffer();
-    const uint8 = new Uint8Array(arrayBuffer);
-    let binary = "";
-    for (let i = 0; i < uint8.length; i++) {
-      binary += String.fromCharCode(uint8[i]);
-    }
-    const base64Image = btoa(binary);
+    const base64Image = base64Encode(arrayBuffer);
+    console.log(`--- [TEST] Encoded Image Length: ${base64Image.length} characters ---`);
 
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
 
