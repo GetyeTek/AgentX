@@ -21,8 +21,21 @@ async function runTest() {
     const base64Image = Buffer.from(await imgBlob.arrayBuffer()).toString('base64');
 
     const { data: audioBlob } = await supabase.storage.from('Audio').download('audio.pcm');
-    const base64Audio = audioBlob ? Buffer.from(await audioBlob.arrayBuffer()).toString('base64') : null;
+    const { data: audioBlob, error: audioErr } = await supabase.storage.from('Audio').download('audio.pcm');
+    let audioBuffer = null;
+    if (audioErr) {
+        console.warn("--- [WARN] audio.pcm missing ---");
+    } else {
+        audioBuffer = Buffer.from(await audioBlob.arrayBuffer());
+        
+        // SANITY CHECK: Check for RIFF header (WAV file)
+        if (audioBuffer.slice(0, 4).toString() === 'RIFF') {
+            console.error("--- [FATAL] audio.pcm HAS A WAV HEADER. Google needs RAW PCM. ---");
+            process.exit(1);
+        }
+    }
     
+    console.log(`--- [STEP 2] Image (${base64Image.length} chars) | Audio (${audioBuffer?.length || 0} bytes) ---`);
     console.log(`--- [STEP 2] Files Ready. Initializing SDK Session... ---`);
 
     const session = await genAI.live.connect({
@@ -56,14 +69,16 @@ async function runTest() {
 
     console.log("--- [STEP 3] SDK Session Connected. Streaming Audio... ---");
     
-    if (base64Audio) {
-        // THE DRIP-FEED: Send audio in small chunks to prevent 1011 Internal Error
-        const CHUNK_SIZE = 4096;
-        for (let i = 0; i < base64Audio.length; i += CHUNK_SIZE) {
-            const chunk = base64Audio.slice(i, i + CHUNK_SIZE);
-            session.sendRealtimeInput([{ data: chunk, mimeType: 'audio/pcm;rate=16000' }]);
-            // Simulate a natural pace
-            await new Promise(r => setTimeout(r, 25));
+    if (audioBuffer) {
+        console.log("--- [INFO] Drip-feeding Audio Buffer... ---");
+        // THE DRIP-FEED: Slice the BUFFER, then encode to BASE64 to maintain alignment
+        const CHUNK_SIZE = 2048; // 2048 bytes = 1024 samples = 64ms at 16khz
+        for (let i = 0; i < audioBuffer.length; i += CHUNK_SIZE) {
+            const chunk = audioBuffer.slice(i, i + CHUNK_SIZE);
+            const b64Chunk = chunk.toString('base64');
+            session.sendRealtimeInput([{ data: b64Chunk, mimeType: 'audio/pcm;rate=16000' }]);
+            // Wait 50ms between chunks to simulate real-time speech
+            await new Promise(r => setTimeout(r, 50));
         }
         console.log("--- [INFO] Audio Stream Complete ---");
     }
