@@ -11,10 +11,11 @@ async function runTest() {
 
     // Filter and Log Image Selection
     const imageFiles = files.filter(f => f.name.endsWith('.jpg')).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    const imageFile = imageFiles[0];
-    
-    if (!imageFile) throw new Error("No .jpg files found in 'Audio' bucket.");
-    console.log(`[MEDIA] Found ${imageFiles.length} images. Picking latest: ${imageFile.name} (${imageFile.metadata.size} bytes, Created: ${imageFile.created_at})`);
+    const imageFile = files.filter(f => f.name.endsWith('.jpg')).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+    if (!imageFile) throw new Error("No JPG found");
+
+    const { data: { publicUrl } } = supabase.storage.from('Audio').getPublicUrl(imageFile.name);
+    console.log(`[FILE INFO] Name: ${imageFile.name} | Size: ${imageFile.metadata.size} bytes | URL: ${publicUrl}`);
 
     const { data: imgBlob } = await supabase.storage.from('Audio').download(imageFile.name);
     const base64Image = Buffer.from(await imgBlob.arrayBuffer()).toString('base64');
@@ -62,12 +63,8 @@ async function runTest() {
     console.log("--- [STEP 2] Streaming Media to Buffer ---");
 
     // 1. Send Image into stream as a single video/image frame
-    session.sendRealtimeInput({
-        mediaChunks: [{
-            data: base64Image,
-            mimeType: 'image/jpeg'
-        }]
-    });
+    // 1. Image will be sent inline in Step 3 for higher accuracy
+    console.log("[INFO] Skipping image stream, using inline injection...");
 
     // 2. Drip-feed Audio
     if (audioBuffer) {
@@ -86,11 +83,14 @@ async function runTest() {
 
     console.log("--- [STEP 3] Media Loaded. Sending Finalized Turn... ---");
     
-    // 3. This matches the Python SDK's end_of_turn=True
+        // 3. Send image as inlineData alongside the text prompt
     session.sendClientContent({
         turns: [{
             role: 'user',
-            parts: [{ text: "Please analyze the screen image and the audio I just sent. Give me the results now." }]
+            parts: [
+                { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
+                { text: "Examine this specific image. It is the AgentX Controller. Describe the status shown (Offline/Online) and the buttons visible. Also consider the audio sent." }
+            ]
         }],
         turnComplete: true
     });
