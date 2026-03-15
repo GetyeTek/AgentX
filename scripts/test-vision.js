@@ -20,15 +20,12 @@ async function runTest() {
     const { data: imgBlob } = await supabase.storage.from('Audio').download(imageFile.name);
     const base64Image = Buffer.from(await imgBlob.arrayBuffer()).toString('base64');
 
-    const { data: audioBlob } = await supabase.storage.from('Audio').download('audio.pcm');
     const { data: audioBlob, error: audioErr } = await supabase.storage.from('Audio').download('audio.pcm');
     let audioBuffer = null;
     if (audioErr) {
         console.warn("--- [WARN] audio.pcm missing ---");
     } else {
         audioBuffer = Buffer.from(await audioBlob.arrayBuffer());
-        
-        // SANITY CHECK: Check for RIFF header (WAV file)
         if (audioBuffer.slice(0, 4).toString() === 'RIFF') {
             console.error("--- [FATAL] audio.pcm HAS A WAV HEADER. Google needs RAW PCM. ---");
             process.exit(1);
