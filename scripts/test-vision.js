@@ -76,16 +76,17 @@ async function runTest() {
         console.log("--- [INFO] Audio streaming complete. ---");
     }
 
-    console.log("--- [STEP 4] Injecting Image via Realtime Pipe... ---");
-    session.sendRealtimeInput([{ data: base64Image, mimeType: 'image/jpeg' }]);
+    console.log("--- [STEP 4] Waiting for Audio to 'Settle' in AI brain... ---");
+    // 5 second delay is the sweet spot for 10s of audio
+    await new Promise(r => setTimeout(r, 5000));
 
-    // Wait 1s for the image to be processed by the vision encoder
-    await new Promise(r => setTimeout(r, 1000));
-
-    console.log("--- [STEP 5] Sending Text Command (No Media)... ---");
+    console.log("--- [STEP 5] Sending Atomic Turn (Image + Question) ---");
     session.sendClientContent({
         turns: [{
-            parts: [{ text: "Look at the screen I just sent and listen to the audio stream. What was said about Firebase vs Supabase pricing? Describe the app UI as well." }]
+            parts: [
+                { text: "Task: 1. Transcribe the audio I just streamed. 2. Describe the EXACT image attached to THIS message. Do not hallucinate. If the audio is missing, say so." },
+                { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+            ]
         }],
         turnComplete: true
     });
