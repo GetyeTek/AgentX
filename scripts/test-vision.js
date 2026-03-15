@@ -54,20 +54,35 @@ async function runTest() {
 
     console.log("--- [STEP 3] Session Ready. Drip-feeding micro-chunks... ---");
 
-    // MICRO-CHUNKING: 1024 bytes is exactly 512 samples at 16bit PCM
-    // This mimics the 'sendAndClearBuffer' logic in the demo repo.
+    // 1. WAV HEADER CHECK
+    if (audioBuffer.toString('utf8', 0, 4) === 'RIFF') {
+        console.error("--- [FATAL] audio.pcm is actually a WAV file! Gemini needs RAW PCM. ---");
+        process.exit(1);
+    }
+
+    // 2. REAL-TIME DRIP-FEED
+    // 16000 Hz * 2 bytes (16-bit) = 32000 bytes per second.
+    // 1024 bytes = 32ms of audio.
     const CHUNK_SIZE = 1024;
+    const CHUNK_DELAY_MS = 32; 
+
+    console.log(`--- [STEP 3] Streaming ${audioBuffer.length} bytes at Real-Time speed (~${Math.round(audioBuffer.length/32000)}s)... ---`);
+
     for (let i = 0; i < audioBuffer.length; i += CHUNK_SIZE) {
         const chunk = audioBuffer.slice(i, i + CHUNK_SIZE);
-        session.sendRealtimeInput([{
-            data: chunk.toString('base64'),
-            mimeType: 'audio/pcm;rate=16000'
-        }]);
-        // Wait 10ms between chunks to simulate real-time speech
-        await new Promise(r => setTimeout(r, 10));
         
-        if (i % (CHUNK_SIZE * 50) === 0) {
-          console.log(`--- [INFO] Sent ${i}/${audioBuffer.length} bytes... ---`);
+        // Using the exact 'media' structure from the demo repo
+        session.sendRealtimeInput({
+            media: {
+                data: chunk.toString('base64'),
+                mimeType: 'audio/pcm;rate=16000'
+            }
+        });
+
+        await new Promise(r => setTimeout(r, CHUNK_DELAY_MS));
+        
+        if (i % (CHUNK_SIZE * 100) === 0) {
+          console.log(`--- [PROGRESS] Sent ${Math.round((i/audioBuffer.length)*100)}% ---`);
         }
     }
 
