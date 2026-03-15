@@ -6,16 +6,20 @@ async function runTest() {
     const MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
     const URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${process.env.GEMINI_API_KEY}`;
 
-    console.log("--- [STEP 1] Fetching latest image from Supabase Storage ---");
+    console.log("--- [STEP 1] Fetching latest image and audio.pcm ---");
     const { data: files } = await supabase.storage.from('Audio').list('', { limit: 1, sortBy: { column: 'created_at', order: 'desc' } });
+    if (!files || files.length === 0) throw new Error("No images found!");
+
+    // 1. Download Latest Image
+    const { data: imgBlob } = await supabase.storage.from('Audio').download(files[0].name);
+    const base64Image = Buffer.from(await imgBlob.arrayBuffer()).toString('base64');
+
+    // 2. Download audio.pcm
+    const { data: audioBlob, error: audioErr } = await supabase.storage.from('Audio').download('audio.pcm');
+    if (audioErr) console.warn("--- [WARN] audio.pcm not found, proceeding with image only ---");
+    const base64Audio = audioBlob ? Buffer.from(await audioBlob.arrayBuffer()).toString('base64') : null;
     
-    if (!files || files.length === 0) throw new Error("No images found in bucket!");
-    
-    const { data: blob } = await supabase.storage.from('Audio').download(files[0].name);
-    const arrayBuffer = await blob.arrayBuffer();
-    const base64Image = Buffer.from(arrayBuffer).toString('base64');
-    
-    console.log(`--- [STEP 2] Image encoded: ${base64Image.length} characters ---`);
+    console.log(`--- [STEP 2] Encoded Image (${base64Image.length}) and Audio (${base64Audio?.length || 0}) ---`);
 
     const ws = new WebSocket(URL);
 
@@ -24,8 +28,8 @@ async function runTest() {
         ws.send(JSON.stringify({
             setup: {
                 model: MODEL,
-                generation_config: { response_modalities: ["AUDIO"] },
-                system_instruction: { parts: [{ text: "You are AgentX. Describe the image provided in detail. Prove you can see the screen." }] }
+                generation_config: { response_modalities: ["TEXT"] },
+                system_instruction: { parts: [{ text: "You are AgentX. You are a multimodal expert. You will receive an image and an audio file. Describe the image and transcribe the audio perfectly." }] }
             }
         }));
     });
@@ -36,24 +40,23 @@ async function runTest() {
         
         const parsed = JSON.parse(raw);
         if (parsed.setupComplete) {
-            console.log("--- [STEP 4] Setup Confirmed. Injecting Image into Turn... ---");
+            console.log("--- [STEP 4] Setup Confirmed. Injecting Multi-part Turn... ---");
             
-            // We bypass realtime_input and put the image DIRECTLY in the turn parts.
-            // This forces the model to treat the image and text as a single unit.
-            const payload = {
+            const parts = [
+                { text: "Describe the attached image and transcribe the attached audio clip." },
+                { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+            ];
+
+            if (base64Audio) {
+                parts.push({ inline_data: { mime_type: "audio/pcm;rate=16000", data: base64Audio } });
+            }
+
+            ws.send(JSON.stringify({
                 client_content: {
-                    turns: [{
-                        role: "user",
-                        parts: [
-                            { text: "Describe this image in extreme detail. What apps, colors, or text do you see?" },
-                            { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-                        ]
-                    }],
+                    turns: [{ role: "user", parts: parts }],
                     turn_complete: true
                 }
-            };
-
-            ws.send(JSON.stringify(payload));
+            }));
         }
     });
 
