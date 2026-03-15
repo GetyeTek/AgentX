@@ -25,23 +25,16 @@ async function runTest() {
         const audioBuffer = Buffer.from(await audioBlob.arrayBuffer());
         
         // --- PCM SANITY CHECK ---
-        const hexHeader = audioBuffer.slice(0, 16).toString('hex').toUpperCase();
-        const asciiHeader = audioBuffer.slice(0, 4).toString('ascii');
-        const duration = audioBuffer.length / 32000; // 16khz * 2 bytes
-
+        const duration = audioBuffer.length / 32000;
         console.log("--- [SANITY CHECK] ---");
-        console.log(`File Size: ${audioBuffer.length} bytes`);
-        console.log(`Estimated Duration: ${duration.toFixed(2)}s`);
-        console.log(`Hex Header: ${hexHeader}`);
+        console.log(`File Size: ${audioBuffer.length} bytes | Duration: ${duration.toFixed(2)}s`);
         
-        if (asciiHeader === 'RIFF' || asciiHeader === 'WAVE') {
-            console.warn("!!! WARNING: This file looks like a WAV file, NOT RAW PCM !!!");
-        } else {
-            console.log("Header looks like Raw Data (Good).");
-        }
-        // -------------------------
+        // SLICE TO 5 SECONDS TO PREVENT 1011 ERROR
+        const fiveSecondsInBytes = 16000 * 2 * 5;
+        const slicedBuffer = audioBuffer.slice(0, fiveSecondsInBytes);
+        console.log(`--- [INFO] Slicing audio to first 5 seconds (${slicedBuffer.length} bytes) ---`);
 
-        base64Audio = audioBuffer.toString('base64');
+        base64Audio = slicedBuffer.toString('base64');
     }
 
     console.log(`--- [STEP 2] Payload: Image(${base64Image.length} chars) | Audio(${base64Audio?.length || 0} chars) ---`);
@@ -68,26 +61,21 @@ async function runTest() {
         }
     });
 
-    console.log("--- [STEP 3] SDK Connected. Drip-feeding Audio... ---");
+    console.log("--- [STEP 3] SDK Connected. Preparing Atomic Multimodal Turn... ---");
     
+    // We package everything into ONE message so the AI can't ignore the parts
+    const turnParts = [
+        { text: "Describe exactly what you see in the image and transcribe exactly what you hear in the audio clip. Do not say you see or hear nothing." },
+        { inline_data: { data: base64Image, mimeType: 'image/jpeg' } }
+    ];
+
     if (base64Audio) {
-        const CHUNK_SIZE = 4096;
-        for (let i = 0; i < base64Audio.length; i += CHUNK_SIZE) {
-            const chunk = base64Audio.slice(i, i + CHUNK_SIZE);
-            session.sendRealtimeInput([{ data: chunk, mimeType: 'audio/pcm;rate=16000' }]);
-            await new Promise(r => setTimeout(r, 25));
-        }
-        console.log("--- [INFO] Audio Stream Complete ---");
+        turnParts.push({ inline_data: { data: base64Audio, mimeType: 'audio/pcm;rate=16000' } });
     }
 
-    // Let the audio 'sink in' for 2 seconds before the vision turn
-    await new Promise(r => setTimeout(r, 2000));
-
-    console.log("--- [STEP 4] Sending Vision + Final Nudge... ---");
-    session.sendRealtimeInput([{ data: base64Image, mimeType: 'image/jpeg' }]);
-
+    console.log("--- [STEP 4] Sending Atomic Turn (Image + 5s Audio) ---");
     session.sendClientContent({
-        turns: [{ role: 'user', parts: [{ text: "What do you see and what do you hear?" }] }],
+        turns: [{ role: 'user', parts: turnParts }],
         turnComplete: true
     });
 
