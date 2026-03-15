@@ -1,4 +1,4 @@
-const { GoogleGenAI } = require('@google/genai');
+const { GoogleGenAI, Modality } = require('@google/genai');
 const { createClient } = require('@supabase/supabase-js');
 
 async function runTest() {
@@ -20,8 +20,8 @@ async function runTest() {
     const session = await genAI.live.connect({
         model: MODEL_ID,
         config: {
-            responseModalities: ['AUDIO'],
-            mediaResolution: 'MEDIA_RESOLUTION_MEDIUM', // Force high-quality vision
+            responseModalities: [Modality.AUDIO],
+            mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
             outputAudioTranscription: {},
             systemInstruction: { parts: [{ text: "You are AgentX. Transcribe the audio and describe the image UI in detail." }] }
         },
@@ -41,15 +41,25 @@ async function runTest() {
 
     console.log("--- [STEP 2] Streaming Media to Buffer ---");
 
-    // 1. Send Image into stream first
-    session.sendRealtimeInput([{ data: base64Image, mimeType: 'image/jpeg' }]);
+    // 1. Send Image into stream as a single video/image frame
+    session.sendRealtimeInput({
+        mediaChunks: [{
+            data: base64Image,
+            mimeType: 'image/jpeg'
+        }]
+    });
 
     // 2. Drip-feed Audio
     if (audioBuffer) {
         const CHUNK_SIZE = 1024;
         for (let i = 0; i < audioBuffer.length; i += CHUNK_SIZE) {
             const chunk = audioBuffer.slice(i, i + CHUNK_SIZE);
-            session.sendRealtimeInput([{ data: chunk.toString('base64'), mimeType: 'audio/pcm;rate=16000' }]);
+            session.sendRealtimeInput({
+                mediaChunks: [{
+                    data: chunk.toString('base64'),
+                    mimeType: 'audio/pcm;rate=16000'
+                }]
+            });
             await new Promise(r => setTimeout(r, 25));
         }
     }
