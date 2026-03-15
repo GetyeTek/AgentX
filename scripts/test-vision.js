@@ -52,7 +52,7 @@ async function runTest() {
             responseModalities: ['AUDIO'],
             outputAudioTranscription: {},
             inputAudioTranscription: {},
-            systemInstruction: { parts: [{ text: "You are AgentX. Transcribe the audio exactly and describe the image. Prove you have eyes and ears." }] }
+            systemInstruction: { parts: [{ text: "You are AgentX. Describe exactly what you see in the images provided and transcribe exactly what you hear in the audio provided. Do not guess." }] }
         },
         callbacks: {
             onmessage: (message) => {
@@ -87,7 +87,7 @@ async function runTest() {
     session.sendRealtimeInput([{ data: base64Image, mimeType: 'image/jpeg' }]);
 
     session.sendClientContent({
-        turns: [{ role: 'user', parts: [{ text: "Transcribe the audio about Firebase/Supabase and describe my screen." }] }],
+        turns: [{ role: 'user', parts: [{ text: "What do you see and what do you hear?" }] }],
         turnComplete: true
     });
 
