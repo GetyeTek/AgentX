@@ -15,8 +15,32 @@ serve(async (req) => {
 
   const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
 
-  clientSocket.onopen = () => {
-    console.log("--- [RELAY] 🟢 Android App Connected ---");
+  clientSocket.onopen = async () => {
+    console.log("--- [RELAY] 🟢 Test Client Connected ---");
+    
+    // 1. FETCH LATEST IMAGE FROM STORAGE
+    const { data: files, error: listError } = await supabase.storage.from("Audio").list("", {
+      limit: 1,
+      sortBy: { column: "created_at", order: "desc" }
+    });
+
+    if (listError || !files || files.length === 0) {
+      console.error("--- [TEST ERROR] No images found in bucket ---");
+      return;
+    }
+
+    const latestFile = files[0].name;
+    console.log(`--- [TEST] Injecting latest file: ${latestFile} ---`);
+
+    const { data: blob, error: downloadError } = await supabase.storage.from("Audio").download(latestFile);
+    if (downloadError) {
+      console.error("--- [TEST ERROR] Download failed ---", downloadError);
+      return;
+    }
+
+    const arrayBuffer = await blob.arrayBuffer();
+    const base64Image = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+
     const googleSocket = new WebSocket(GOOGLE_WS_URL);
 
     // 1. INITIAL SETUP (The Golden Config)
@@ -40,6 +64,30 @@ serve(async (req) => {
           output_audio_transcription: {}
         }
       }));
+
+      // 2. INJECT TARGETED TEST DATA (Immediately after setup)
+      setTimeout(() => {
+        console.log("--- [TEST] Pumping Image Payload... ---");
+        googleSocket.send(JSON.stringify({
+          realtime_input: {
+            media_chunks: [{
+              mime_type: "image/jpeg",
+              data: base64Image
+            }]
+          }
+        }));
+
+        console.log("--- [TEST] Pumping Force-Description Nudge... ---");
+        googleSocket.send(JSON.stringify({
+          client_content: {
+            turns: [{
+              role: "user",
+              parts: [{ text: "Describe exactly what you see in the image I just sent. Be specific about colors and text." }]
+            }],
+            turn_complete: true
+          }
+        }));
+      }, 1000);
     };
 
     // 2. GOOGLE -> CLIENT (AI Responses)
@@ -57,6 +105,7 @@ serve(async (req) => {
       }
 
       try {
+        console.log("--- [RAW GOOGLE RESPONSE] ---", textContent);
         const data = JSON.parse(textContent);
         isJson = true;
 
