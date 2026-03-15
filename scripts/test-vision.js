@@ -24,44 +24,77 @@ async function runTest() {
     const ws = new WebSocket(URL);
 
     ws.on('open', () => {
-        console.log("--- [STEP 3] Connected to Google. Sending Setup... ---");
-        ws.send(JSON.stringify({
+        console.log("--- [STEP 3] WebSocket Connected. Sending Setup Payload... ---");
+        const setup = {
             setup: {
                 model: MODEL,
                 generation_config: { response_modalities: ["TEXT"] },
                 system_instruction: { parts: [{ text: "You are AgentX. You are a multimodal expert. You will receive an image and an audio file. Describe the image and transcribe the audio perfectly." }] }
             }
-        }));
+        };
+        ws.send(JSON.stringify(setup));
     });
 
     ws.on('message', (data) => {
         const raw = data.toString();
-        console.log("--- [RAW RESPONSE] ---", raw);
+        console.log("--- [INCOMING MESSAGE] ---");
         
-        const parsed = JSON.parse(raw);
-        if (parsed.setupComplete) {
-            console.log("--- [STEP 4] Setup Confirmed. Injecting Multi-part Turn... ---");
-            
-            const parts = [
-                { text: "Describe the attached image and transcribe the attached audio clip." },
-                { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-            ];
+        try {
+            const parsed = JSON.parse(raw);
+            // Only log the structure, not the giant binary fields if they exist
+            console.log(JSON.stringify(parsed, (k,v) => k === 'data' ? '[BINARY_DATA]' : v, 2));
 
-            if (base64Audio) {
-                parts.push({ inline_data: { mime_type: "audio/pcm;rate=16000", data: base64Audio } });
+            if (parsed.setupComplete || parsed.setup_complete) {
+                console.log("--- [STEP 4] Setup Confirmed. Building Multi-part Payload... ---");
+                
+                const parts = [
+                    { text: "Analyze this screen and transcribe the audio clip." },
+                    { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+                ];
+
+                if (base64Audio) {
+                    console.log("--- [INFO] Including Audio Part ---");
+                    parts.push({ inline_data: { mime_type: "audio/pcm;rate=16000", data: base64Audio } });
+                }
+
+                ws.send(JSON.stringify({
+                    client_content: {
+                        turns: [{ role: "user", parts: parts }],
+                        turn_complete: true
+                    }
+                }));
+                console.log("--- [STEP 5] Atomic Turn Sent. Waiting for AI response... ---");
             }
 
-            ws.send(JSON.stringify({
-                client_content: {
-                    turns: [{ role: "user", parts: parts }],
-                    turn_complete: true
-                }
-            }));
+            if (parsed.serverContent?.modelTurn) {
+                console.log("--- [SUCCESS] AI Responded! ---");
+                process.exit(0);
+            }
+
+            if (parsed.error) {
+                console.error("--- [GOOGLE API ERROR] ---", JSON.stringify(parsed.error, null, 2));
+                process.exit(1);
+            }
+
+        } catch (e) {
+            console.log("--- [RAW NON-JSON MESSAGE] ---", raw.substring(0, 500));
         }
     });
 
-    ws.on('error', console.error);
-    setTimeout(() => { console.log("Test timeout reached."); process.exit(0); }, 15000);
+    ws.on('error', (err) => {
+        console.error("--- [WEBSOCKET ERROR] ---", err);
+    });
+
+    ws.on('close', (code, reason) => {
+        console.log(`--- [WEBSOCKET CLOSED] Code: ${code}, Reason: ${reason} ---`);
+        if (code !== 1000) process.exit(1);
+    });
+
+    // Increase timeout to 30s because multimodal processing is slow
+    setTimeout(() => {
+        console.log("--- [FATAL] Test timed out after 30 seconds. No AI response received. ---");
+        process.exit(1);
+    }, 30000);
 }
 
 runTest().catch(console.error);
