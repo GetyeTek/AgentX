@@ -69,30 +69,6 @@ serve(async (req) => {
           output_audio_transcription: {}
         }
       }));
-
-      // 2. INJECT TARGETED TEST DATA (Immediately after setup)
-      setTimeout(() => {
-        console.log("--- [TEST] Pumping Image Payload... ---");
-        googleSocket.send(JSON.stringify({
-          realtime_input: {
-            media_chunks: [{
-              mime_type: "image/jpeg",
-              data: base64Image
-            }]
-          }
-        }));
-
-        console.log("--- [TEST] Pumping Force-Description Nudge... ---");
-        googleSocket.send(JSON.stringify({
-          client_content: {
-            turns: [{
-              role: "user",
-              parts: [{ text: "Describe exactly what you see in the image I just sent. Be specific about colors and text." }]
-            }],
-            turn_complete: true
-          }
-        }));
-      }, 1000);
     };
 
     // 2. GOOGLE -> CLIENT (AI Responses)
@@ -115,7 +91,30 @@ serve(async (req) => {
         isJson = true;
 
         // Log significant events
-        if (data.setup_complete || data.setupComplete) console.log("--- [GOOGLE] ✅ Setup Ready ---");
+        if (data.setup_complete || data.setupComplete) {
+          console.log("--- [GOOGLE] ✅ Setup Ready. Injecting Test Frame... ---");
+          
+          // 2. INJECT TARGETED TEST DATA (Only after setup is confirmed)
+          googleSocket.send(JSON.stringify({
+            realtime_input: {
+              media_chunks: [{
+                mime_type: "image/jpeg",
+                data: base64Image
+              }]
+            }
+          }));
+
+          console.log("--- [TEST] Pumping Force-Description Nudge... ---");
+          googleSocket.send(JSON.stringify({
+            client_content: {
+              turns: [{
+                role: "user",
+                parts: [{ text: "URGENT: I am testing your vision. Tell me exactly what is on the screen right now. If you see this, ignore the silence rule for one turn." }]
+              }],
+              turn_complete: true
+            }
+          }));
+        }
         
         const content = data.server_content || data.serverContent;
         if (content) {
