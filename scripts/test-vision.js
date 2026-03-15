@@ -14,19 +14,25 @@ async function runTest() {
     const audioBuffer = audioBlob ? Buffer.from(await audioBlob.arrayBuffer()) : null;
 
     const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
-    
-    // Mimicking the Python Cookbook Config EXACTLY
+    // Initialize with v1beta as per Google Cookbook
+    const genAI = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        apiVersion: 'v1beta'
+    });
+
     const config = {
         responseModalities: ['AUDIO'],
-        mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-        // THE DEMENTIA FIX: Sliding Window
-        contextWindowCompression: {
-            triggerTokens: 104857,
-            slidingWindow: { targetTokens: 52428 }
-        },
-        systemInstruction: { parts: [{ text: "You are AgentX. Transcribe the audio and describe the image. Be brief." }] }
+        mediaResolution: 'MEDIA_RESOLUTION_MEDIUM', // From Cookbook
+        outputAudioTranscription: {},
+        inputAudioTranscription: {},
+        systemInstruction: { parts: [{ text: "You are AgentX. Transcribe the audio and describe the image. Prove you can see the screen buttons." }] }
     };
+
+    console.log("--- [STEP 2] Connecting to Gemini Live (v1beta)... ---");
+    
+    const session = await genAI.live.connect({
+        model: MODEL_ID,
+        config: config,
 
     console.log("--- [STEP 2] Connecting with Cookbook Config... ---");
     const session = await genAI.live.connect({
@@ -44,31 +50,35 @@ async function runTest() {
         }
     });
 
-    console.log("--- [STEP 3] Interleaving Data (Python Style) ---");
+    console.log("--- [STEP 3] Session Ready. Streaming Media into Buffer... ---");
 
-    // 1. Send Text Command into buffer
-    session.sendRealtimeInput([{ text: "Please analyze this screen and transcribe the audio." }]);
+    // 1. Send Image into the rolling buffer first
+    console.log("--- [INFO] Sending Vision Frame... ---");
+    session.sendRealtimeInput([{
+        data: base64Image,
+        mimeType: 'image/jpeg'
+    }]);
 
-    // 2. Stream Audio
+    // 2. Drip-feed audio into the buffer
     if (audioBuffer) {
-        const CHUNK_SIZE = 1024;
+        const CHUNK_SIZE = 2048; 
+        console.log("--- [INFO] Pumping audio... ---");
         for (let i = 0; i < audioBuffer.length; i += CHUNK_SIZE) {
             const chunk = audioBuffer.slice(i, i + CHUNK_SIZE);
-            session.sendRealtimeInput([{ data: chunk.toString('base64'), mimeType: 'audio/pcm;rate=16000' }]);
-            await new Promise(r => setTimeout(r, 20));
+            session.sendRealtimeInput([{
+                data: chunk.toString('base64'),
+                mimeType: 'audio/pcm;rate=16000'
+            }]);
+            await new Promise(r => setTimeout(r, 25));
         }
     }
 
-    // 3. Send Image and FINALIZE turn in one go
-    console.log("--- [STEP 4] Finalizing with Image... ---");
+    // 3. The Cookbook Trigger: Send a turn to claim the buffer
+    console.log("--- [STEP 4] Media Streamed. Triggering Turn... ---");
     session.sendClientContent({
-        turns: [{
-            role: 'user',
-            parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Image } }]
-        }],
+        turns: [{ role: 'user', parts: [{ text: "Look at the image I just sent and listen to the audio. Give me the transcription and the description now." }] }],
         turnComplete: true
     });
-
     setTimeout(() => { console.log("--- [FINISH] ---"); process.exit(0); }, 15000);
 }
 
