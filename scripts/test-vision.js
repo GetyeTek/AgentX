@@ -76,20 +76,22 @@ async function runTest() {
         console.log("--- [INFO] Audio streaming complete. ---");
     }
 
-    console.log("--- [STEP 4] Waiting for Audio to 'Settle' in AI brain... ---");
-    // 5 second delay is the sweet spot for 10s of audio
-    await new Promise(r => setTimeout(r, 5000));
+    console.log("--- [STEP 4] Waiting for Audio processing (3s)... ---");
+    await new Promise(r => setTimeout(r, 3000));
 
-    console.log("--- [STEP 5] Sending Atomic Turn (Image + Question) ---");
-    session.sendClientContent({
-        turns: [{
-            parts: [
-                { text: "Task: 1. Transcribe the audio I just streamed. 2. Describe the EXACT image attached to THIS message. Do not hallucinate. If the audio is missing, say so." },
-                { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-            ]
-        }],
-        turnComplete: true
-    });
+    console.log("--- [STEP 5] Sending Atomic Turn (Correct SDK Syntax) ---");
+    
+    // The SDK expects a Content object directly: { parts: Part[] }
+    // And it uses camelCase 'inlineData'
+    const content = {
+        parts: [
+            { text: "Analyze this screen (AgentX app) and transcribe the audio I just streamed. Be precise." },
+            { inlineData: { mimeType: "image/jpeg", data: base64Image } }
+        ]
+    };
+
+    session.sendClientContent(content, true);
+    console.log("--- [INFO] Payload sent. Waiting for AI response... ---");
 
     console.log("--- [STEP 5] Final payload sent. Waiting for AI... ---");
 
