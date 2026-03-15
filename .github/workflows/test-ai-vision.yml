@@ -16,7 +16,7 @@ jobs:
           node-version: 20
 
       - name: Install Dependencies
-        run: npm install ws @supabase/supabase-js
+        run: npm install @google/genai @supabase/supabase-js
 
       - name: Run Targeted Injection
         env:
