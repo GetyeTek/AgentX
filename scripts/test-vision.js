@@ -34,37 +34,14 @@ async function runTest() {
             systemInstruction: { parts: [{ text: "You are AgentX. Transcribe the audio I stream and describe the image I send. Prove you have eyes and ears." }] }
         },
         callbacks: {
-            onopen: async () => {
-                console.log("--- [STEP 3] SDK Session Opened. Streaming Audio... ---");
-                
-                if (base64Audio) {
-                    // THE DRIP-FEED: Send audio in small chunks to prevent 1011 Internal Error
-                    const CHUNK_SIZE = 4096;
-                    for (let i = 0; i < base64Audio.length; i += CHUNK_SIZE) {
-                        const chunk = base64Audio.slice(i, i + CHUNK_SIZE);
-                        session.sendRealtimeInput([{ data: chunk, mimeType: 'audio/pcm;rate=16000' }]);
-                        // Simulate a natural pace (approx 30ms per chunk)
-                        await new Promise(r => setTimeout(r, 20));
-                    }
-                    console.log("--- [INFO] Audio Stream Complete ---");
-                }
-
-                console.log("--- [STEP 4] Injecting Image Frame... ---");
-                session.sendRealtimeInput([{ data: base64Image, mimeType: 'image/jpeg' }]);
-
-                console.log("--- [STEP 5] Sending Final Nudge... ---");
-                session.sendClientContent({
-                    turns: [{ role: 'user', parts: [{ text: "Transcribe that audio clip and describe my screen." }] }],
-                    turnComplete: true
-                });
-            },
             onmessage: (message) => {
                 // Filter out the giant binary voice data so we can see the text logic
                 console.log("--- [INCOMING] ---", JSON.stringify(message, (k,v) => k === 'data' ? '[BINARY]' : v, 2));
                 
                 if (message.serverContent?.modelTurn || message.serverContent?.outputTranscription) {
                     console.log("--- [SUCCESS] Content Received! ---");
-                    setTimeout(() => process.exit(0), 5000); // Give it time to finish speaking
+                    // Wait a bit to catch the full spoken response before exiting
+                    setTimeout(() => process.exit(0), 8000);
                 }
             },
             onerror: (err) => {
@@ -75,6 +52,29 @@ async function runTest() {
                 console.log("--- [SDK CLOSED] ---", e);
             }
         }
+    });
+
+    console.log("--- [STEP 3] SDK Session Connected. Streaming Audio... ---");
+    
+    if (base64Audio) {
+        // THE DRIP-FEED: Send audio in small chunks to prevent 1011 Internal Error
+        const CHUNK_SIZE = 4096;
+        for (let i = 0; i < base64Audio.length; i += CHUNK_SIZE) {
+            const chunk = base64Audio.slice(i, i + CHUNK_SIZE);
+            session.sendRealtimeInput([{ data: chunk, mimeType: 'audio/pcm;rate=16000' }]);
+            // Simulate a natural pace
+            await new Promise(r => setTimeout(r, 25));
+        }
+        console.log("--- [INFO] Audio Stream Complete ---");
+    }
+
+    console.log("--- [STEP 4] Injecting Image Frame... ---");
+    session.sendRealtimeInput([{ data: base64Image, mimeType: 'image/jpeg' }]);
+
+    console.log("--- [STEP 5] Sending Final Nudge... ---");
+    session.sendClientContent({
+        turns: [{ role: 'user', parts: [{ text: "Transcribe that audio clip and describe my screen." }] }],
+        turnComplete: true
     });
 
     setTimeout(() => { console.log("--- [TIMEOUT] ---"); process.exit(1); }, 60000);
