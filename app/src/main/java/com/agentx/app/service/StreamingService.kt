@@ -37,6 +37,7 @@ class StreamingService : Service() {
     private var webSocket: WebSocket? = null
     private var isMicEnabled = false
     private val speechBuffer = StringBuilder()
+    private var lastActionTime = 0L
     
     @Volatile
     private var isRunning = true
@@ -116,21 +117,24 @@ class StreamingService : Service() {
                             DebugLogManager.log("ACTION", "Executing $name with $args")
                             val a11y = AgentXAccessibilityService.instance
                             
+                            lastActionTime = System.currentTimeMillis()
                             when (name) {
                                 "tap" -> {
                                     val aiX = args.getInt("x")
                                     val aiY = args.getInt("y")
-                                    // Scale from AI's 1024-width world back to real screen pixels
                                     val wm = getSystemService(WINDOW_SERVICE) as WindowManager
                                     val metrics = DisplayMetrics()
                                     wm.defaultDisplay.getRealMetrics(metrics)
                                     val scale = metrics.widthPixels.toFloat() / 1024f
                                     a11y?.tap((aiX * scale).toInt(), (aiY * scale).toInt())
                                 }
-                                "swipe" -> a11y?.swipe(
-                                    args.getInt("x1"), args.getInt("y1"), 
-                                    args.getInt("x2"), args.getInt("y2")
-                                )
+                                "swipe" -> {
+                                    val scale = (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.width / 1024f
+                                    a11y?.swipe(
+                                        (args.getInt("x1") * scale).toInt(), (args.getInt("y1") * scale).toInt(), 
+                                        (args.getInt("x2") * scale).toInt(), (args.getInt("y2") * scale).toInt()
+                                    )
+                                }
                                 "home" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
                                 "back" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
                                 "recents" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
@@ -196,7 +200,13 @@ class StreamingService : Service() {
         handler?.post(object : Runnable {
             override fun run() {
                 if (!isRunning) return
-                captureAndSendFrame()
+                
+                // Only send frame if we haven't acted in the last 2 seconds
+                // This prevents the AI from seeing 'stale' or 'transitioning' screens
+                if (System.currentTimeMillis() - lastActionTime > 2000) {
+                    captureAndSendFrame()
+                }
+                
                 handler?.postDelayed(this, 1000)
             }
         })
