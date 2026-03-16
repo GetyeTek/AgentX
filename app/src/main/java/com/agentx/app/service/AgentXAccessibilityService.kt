@@ -14,6 +14,8 @@ class AgentXAccessibilityService : AccessibilityService() {
     private var overlayView: View? = null
     private var wm: WindowManager? = null
     private var thoughtText: TextView? = null
+    private val hideHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val hideRunnable = Runnable { thoughtText?.visibility = View.GONE }
 
     companion object {
         var instance: AgentXAccessibilityService? = null
@@ -35,22 +37,30 @@ class AgentXAccessibilityService : AccessibilityService() {
         )
         params.gravity = Gravity.TOP
 
-        // Basic overlay layout - using a simple TextView programmatically for now
         thoughtText = TextView(this).apply {
-            // HUD STYLING
-            setBackgroundResource(android.R.drawable.toast_frame)
-            backgroundTintList = android.content.res.ColorStateList.valueOf(0xCC000000.toInt())
-            setTextColor(0xFF00FF00.toInt()) // Sci-fi Green
+            // HUD STYLING: Transparent black background, neon green text
+            setBackgroundColor(0x99000000.toInt()) 
+            setTextColor(0xFF00FF00.toInt())
             textSize = 14f
-            setPadding(30, 30, 30, 30)
-            text = "AgentX: Initializing..."
+            setPadding(40, 60, 40, 40)
+            text = "AgentX: Ready"
+            visibility = View.GONE // Start hidden
         }
         
         wm?.addView(thoughtText, params)
     }
 
-    fun updateThought(text: String) {
-        thoughtText?.post { thoughtText?.text = text }
+    fun updateThought(newText: String) {
+        thoughtText?.post {
+            thoughtText?.apply {
+                text = newText
+                visibility = View.VISIBLE
+                
+                // Reset auto-hide timer (5 seconds)
+                hideHandler.removeCallbacks(hideRunnable)
+                hideHandler.postDelayed(hideRunnable, 5000)
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
