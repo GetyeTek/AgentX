@@ -27,6 +27,7 @@ import android.os.Build
 
 class StreamingService : Service() {
     private var mediaProjection: MediaProjection? = null
+    private val isActive = java.util.concurrent.atomic.AtomicBoolean(false)
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var lastUserCommand: String = ""
@@ -56,6 +57,7 @@ class StreamingService : Service() {
         }
 
         startForeground(1, createNotification())
+        isActive.set(true)
 
         if (resultData != null) {
             val mpManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -83,6 +85,7 @@ class StreamingService : Service() {
     }
 
     private fun runBrainCycle(userPrompt: String) {
+        if (!isActive.get()) return
         Thread {
             DebugLogManager.log("BRAIN", "Starting Cycle: $userPrompt")
             val imageBase64 = captureCurrentFrameBase64()
@@ -268,7 +271,9 @@ class StreamingService : Service() {
 
         DebugLogManager.log("ACTION", "$actionSummary. Sleeping ${waitTime}ms...")
         Thread.sleep(waitTime)
-        runBrainCycle(lastUserCommand)
+        if (isActive.get()) {
+            runBrainCycle(lastUserCommand)
+        }
     }
 
     private fun createNotification(): Notification {
@@ -285,6 +290,7 @@ class StreamingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        isActive.set(false)
         virtualDisplay?.release()
         imageReader?.close()
         mediaProjection?.stop()
