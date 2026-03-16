@@ -34,16 +34,15 @@ class StreamingService : Service() {
     private var imageReader: ImageReader? = null
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
-    private var webSocket: WebSocket? = null
     private var isMicEnabled = false
-    private val speechBuffer = StringBuilder()
     private var lastActionTime = 0L
     
     @Volatile
     private var isRunning = true
 
     private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
     private val commandReceiver = object : android.content.BroadcastReceiver() {
@@ -75,108 +74,71 @@ class StreamingService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun connectWebSocket() {
-        val request = Request.Builder()
-            .url("wss://xvldfsmxskhemkslsbym.supabase.co/functions/v1/gemini-live-relay")
-            .build()
-
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                DebugLogManager.log("WS", "Pipe Open: ${response.code}")
-                AgentXAccessibilityService.instance?.updateThought("AgentX: Listening...")
+    private fun runBrainCycle(userPrompt: String) {
+        Thread {
+            val imageBase64 = captureCurrentFrameBase64() ?: return@Thread
+            val uiTree = AgentXAccessibilityService.instance?.getUiTree() ?: "[]"
+            
+            val json = JSONObject().apply {
+                put("image", imageBase64)
+                put("tree", uiTree)
+                put("prompt", userPrompt)
             }
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                processIncoming(text)
-            }
+            val body = RequestBody.create(MediaType.parse("application/json"), json.toString())
+            val request = Request.Builder()
+                .url("https://xvldfsmxskhemkslsbym.supabase.co/functions/v1/agent-brain")
+                .post(body)
+                .build()
 
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                val content = bytes.utf8()
-                if (content.trim().startsWith("{")) {
-                    processIncoming(content)
-                } else {
-                    DebugLogManager.log("AUDIO_IN", "Received ${bytes.size} bytes")
+            try {
+                client.newCall(request).execute().use { response ->
+                    val respData = response.body()?.string() ?: ""
+                    processBrainResponse(respData)
                 }
+            } catch (e: Exception) {
+                DebugLogManager.log("BRAIN_ERR", e.message ?: "Unknown error")
             }
+        }.start()
+    }
 
-            private fun processIncoming(raw: String) {
-                try {
-                    val json = JSONObject(raw)
-                    val sc = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
+    private fun captureCurrentFrameBase64(): String? {
+        val image = imageReader?.acquireLatestImage() ?: return null
+        try {
+            val planes = image.planes
+            val buffer = planes[0].buffer
+            val pixelStride = planes[0].pixelStride
+            val rowStride = planes[0].rowStride
+            val rowPadding = rowStride - pixelStride * image.width
+            val fullBitmap = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
+            fullBitmap.copyPixelsFromBuffer(buffer)
+            val out = ByteArrayOutputStream()
+            Bitmap.createBitmap(fullBitmap, 0, 0, image.width, image.height).compress(Bitmap.CompressFormat.JPEG, 70, out)
+            return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        } finally { image.close() }
+    }
 
-                    // 1. Handle Tool Calls (Action commands from AI)
-                    val toolCall = sc?.optJSONObject("tool_call") ?: sc?.optJSONObject("toolCall")
-                    val functionCalls = toolCall?.optJSONArray("function_calls") ?: toolCall?.optJSONArray("functionCalls")
-
-                    if (functionCalls != null) {
-                        for (i in 0 until functionCalls.length()) {
-                            val call = functionCalls.getJSONObject(i)
-                            val name = call.getString("name")
-                            val args = call.optJSONObject("args")
-
-                            DebugLogManager.log("ACTION", "Executing $name with $args")
-                            val a11y = AgentXAccessibilityService.instance
-                            
-                            lastActionTime = System.currentTimeMillis()
-                            when (name) {
-                                "tap" -> {
-                                    val aiX = args.getInt("x")
-                                    val aiY = args.getInt("y")
-                                    val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-                                    val metrics = DisplayMetrics()
-                                    wm.defaultDisplay.getRealMetrics(metrics)
-                                    val scale = metrics.widthPixels.toFloat() / 1024f
-                                    a11y?.tap((aiX * scale).toInt(), (aiY * scale).toInt())
-                                }
-                                "swipe" -> {
-                                    val scale = (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.width / 1024f
-                                    a11y?.swipe(
-                                        (args.getInt("x1") * scale).toInt(), (args.getInt("y1") * scale).toInt(), 
-                                        (args.getInt("x2") * scale).toInt(), (args.getInt("y2") * scale).toInt()
-                                    )
-                                }
-                                "home" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
-                                "back" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
-                                "recents" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
-                            }
-                        }
-                        return // Action handled
-                    }
-
-                    // 2. Handle Coherent Sentences (Sent as model_turn by Edge Function)
-                    val mt = sc?.optJSONObject("model_turn") ?: sc?.optJSONObject("modelTurn")
-                    val parts = mt?.optJSONArray("parts")
-                    if (parts != null) {
-                        var fullText = ""
-                        for (i in 0 until parts.length()) {
-                            val part = parts.optJSONObject(i)
-                            fullText += part?.optString("text") ?: ""
-                        }
-                        
-                        if (fullText.isNotEmpty()) {
-                            AgentXAccessibilityService.instance?.updateThought("🧠 $fullText")
-                            DebugLogManager.log("AI_TURN", "🧠 $fullText")
-                        }
-                    }
-
-                    if (json.has("setup_complete") || json.has("setupComplete")) {
-                        DebugLogManager.log("SYSTEM", "Gemini Setup Confirmed")
-                    }
-                } catch (e: Exception) {
-                    DebugLogManager.log("PARSE_ERR", "Failed to decode: ${e.message}")
-                }
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                DebugLogManager.log("WS_FAIL", "${t.message}")
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                DebugLogManager.log("WS_CLOSE", "$code: $reason")
-            }
-        })
+    private fun processBrainResponse(raw: String) {
+        val json = JSONObject(raw)
+        val candidates = json.optJSONArray("candidates")?.optJSONObject(0)
+        val call = candidates?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optJSONObject("function_call")
         
-        startCaptureLoop()
+        if (call != null) {
+            val name = call.getString("name")
+            val args = call.optJSONObject("args")
+            val a11y = AgentXAccessibilityService.instance
+            
+            when (name) {
+                "tap_coords" -> {
+                    val scale = getSystemService(WindowManager::class.java).defaultDisplay.width / 1024f
+                    a11y?.tap((args.getInt("x") * scale).toInt(), (args.getInt("y") * scale).toInt())
+                }
+                "home" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+            }
+            // After acting, we automatically re-trigger a 'look' to see what happened
+            Thread.sleep(2000)
+            runBrainCycle("Observe the result of the last action and continue the task.")
+        }
     }
 
     private fun startCaptureLoop() {
