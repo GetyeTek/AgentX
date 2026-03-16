@@ -104,11 +104,10 @@ class MainActivity : ComponentActivity() {
                         )
                         Button(
                             onClick = {
-                                val intent = Intent("com.agentx.app.SEND_COMMAND").apply { 
-                                    setPackage(packageName)
-                                    putExtra("COMMAND", userCommand) 
+                                val intent = Intent(this@MainActivity, StreamingService::class.java).apply {
+                                    putExtra("COMMAND", userCommand)
                                 }
-                                sendBroadcast(intent)
+                                startForegroundService(intent)
                                 userCommand = ""
                             },
                             modifier = Modifier.fillMaxWidth(),
