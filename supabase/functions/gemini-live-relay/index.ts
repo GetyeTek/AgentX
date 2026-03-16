@@ -25,7 +25,7 @@ serve(async (req) => {
           generation_config: { response_modalities: ["AUDIO"] },
           system_instruction: {
             parts: [{
-              text: "You are AgentX, an AI co-pilot for Android. INTERACTION RULES:\n1. COORDINATES: The image you see is exactly 1024 pixels wide. Calculate Y based on the aspect ratio you see. Your tap coordinates MUST be relative to this 1024-wide frame.\n2. PRECISION: When you tap, a red dot will appear in the next frame at that exact spot. Use this to self-correct your aim if you miss.\n3. VISUAL GRID: If you are struggling to find a small button, think out loud about the grid coordinates (e.g. 'Button is at roughly 500, 1200') before calling the tool.\n4. SPEECH: Wrap all verbal responses in triple backticks. No backticks = no speech."
+              text: "You are AgentX, an Android co-pilot. RULES:\n1. IMMEDIATE ACTION: When you decide to tap or swipe, emit the tool call IMMEDIATELY. Do not describe the plan first.\n2. COORDINATES: The image is 1024px wide. Calculate Y based on aspect ratio. Send coordinates relative to 1024px width.\n3. FEEDBACK: A red dot appears where you last tapped. Use it to self-correct.\n4. HUD: Wrap speech in triple backticks. Keep HUD messages extremely short (e.g., ```Tapping Settings...```). No backticks = Silence."
             }]
           },
           tools: [{
@@ -79,7 +79,6 @@ serve(async (req) => {
               transcriptionBuffer = parts.slice(2).join("```");
             }
           }
-          return;
         }
 
         // Forward everything else, INCLUDING TOOL CALLS
