@@ -40,8 +40,9 @@ class MainActivity : ComponentActivity() {
 
     private var savedMicState = false
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+        override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        syncInstalledAppsIfNeeded()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 var showDebug by remember { mutableStateOf(false) }
@@ -152,6 +153,48 @@ class MainActivity : ComponentActivity() {
         
         val mpManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projectionLauncher.launch(mpManager.createScreenCaptureIntent())
+    }
+
+    private fun syncInstalledAppsIfNeeded() {
+        val prefs = getSharedPreferences("agentx_prefs", Context.MODE_PRIVATE)
+        val lastSync = prefs.getLong("last_app_sync", 0)
+        val threeDaysMs = 3 * 24 * 60 * 60 * 1000L
+
+        if (System.currentTimeMillis() - lastSync > threeDaysMs) {
+            Thread { 
+                try {
+                    val pm = packageManager
+                    val mainIntent = Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
+                    val apps = pm.queryIntentActivities(mainIntent, 0)
+                    
+                    val jsonArray = org.json.JSONArray()
+                    for (app in apps) {
+                        val obj = org.json.JSONObject()
+                        obj.put("app_name", app.loadLabel(pm).toString())
+                        obj.put("package_name", app.activityInfo.packageName)
+                        jsonArray.put(obj)
+                    }
+
+                    val client = okhttp3.OkHttpClient()
+                    val body = org.json.JSONObject().apply { put("apps", jsonArray) }.toString()
+                        .toRequestBody("application/json".toMediaType())
+                    
+                    val request = okhttp3.Request.Builder()
+                        .url("https://xvldfsmxskhemkslsbym.supabase.co/functions/v1/sync-apps")
+                        .post(body)
+                        .build()
+
+                    client.newCall(request).execute().use {
+                        if (it.isSuccessful) {
+                            prefs.edit().putLong("last_app_sync", System.currentTimeMillis()).apply()
+                            DebugLogManager.log("SYNC", "App directory synced to cloud")
+                        }
+                    }
+                } catch (e: Exception) {
+                    DebugLogManager.log("SYNC_ERR", e.message ?: "Unknown error")
+                }
+            }.start()
+        }
     }
 }
 
