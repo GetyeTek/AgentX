@@ -33,7 +33,21 @@ serve(async (req) => {
               { name: "tap", description: "Tap screen at pixel coordinates", parameters: { type: "OBJECT", properties: { x: { type: "integer" }, y: { type: "integer" } }, required: ["x", "y"] } },
               { name: "home", description: "Press the home button", parameters: { type: "OBJECT", properties: {} } },
               { name: "back", description: "Press the back button", parameters: { type: "OBJECT", properties: {} } },
-              { name: "recents", description: "Open recent apps list", parameters: { type: "OBJECT", properties: {} } }
+              { name: "recents", description: "Open recent apps list", parameters: { type: "OBJECT", properties: {} } },
+              { 
+                name: "swipe", 
+                description: "Swipe from one point to another", 
+                parameters: { 
+                  type: "OBJECT", 
+                  properties: { 
+                    x1: { type: "integer", description: "Start X" }, 
+                    y1: { type: "integer", description: "Start Y" },
+                    x2: { type: "integer", description: "End X" },
+                    y2: { type: "integer", description: "End Y" }
+                  }, 
+                  required: ["x1", "y1", "x2", "y2"] 
+                } 
+              }
             ]
           }],
           output_audio_transcription: {},
