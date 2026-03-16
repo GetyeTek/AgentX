@@ -140,7 +140,6 @@ class StreamingService : Service() {
             DebugLogManager.log("RAW_JSON", raw)
             val json = JSONObject(raw)
             
-            // Handle potential Top-Level Error from Google
             if (json.has("error")) {
                 DebugLogManager.log("GOOGLE_ERR", json.getJSONObject("error").getString("message"))
                 return
@@ -148,11 +147,20 @@ class StreamingService : Service() {
 
             val candidates = json.optJSONArray("candidates")?.optJSONObject(0)
             val content = candidates?.optJSONObject("content")
-            val parts = content?.optJSONArray("parts")
-            val firstPart = parts?.optJSONObject(0)
+            val parts = content?.optJSONArray("parts") ?: JSONArray()
             
-            val call = firstPart?.optJSONObject("function_call")
-            val textResponse = firstPart?.optString("text", "") ?: ""
+            var textResponse = ""
+            var call: JSONObject? = null
+
+            // Loop through all parts to find text and function calls
+            for (i in 0 until parts.length()) {
+                val part = parts.getJSONObject(i)
+                if (part.has("text")) textResponse += part.getString("text")
+                
+                // Gemini 3 uses CamelCase 'functionCall'
+                if (part.has("functionCall")) call = part.getJSONObject("functionCall")
+                else if (part.has("function_call")) call = part.getJSONObject("function_call")
+            }
 
             if (textResponse.isNotEmpty()) {
                 AgentXAccessibilityService.instance?.updateThought(textResponse)
@@ -161,15 +169,19 @@ class StreamingService : Service() {
 
             if (call != null) {
                 val name = call.getString("name")
-                val args = call.optJSONObject("args")
+                val args = call.optJSONObject("args") ?: JSONObject()
                 executeTool(name, args)
-            } else if (!textResponse.startsWith("DONE:")) {
-                // If no tool call and not done, wait and look again
-                Thread.sleep(3000)
-                runBrainCycle(lastUserCommand)
+            } else {
+                if (textResponse.startsWith("DONE:")) {
+                    DebugLogManager.log("SYSTEM", "Task Finished")
+                } else {
+                    DebugLogManager.log("SYSTEM", "No action found, re-observing...")
+                    Thread.sleep(3000)
+                    runBrainCycle(lastUserCommand)
+                }
             }
         } catch (e: Exception) {
-            DebugLogManager.log("PARSE_ERR", e.message ?: "JSON Error")
+            DebugLogManager.log("PARSE_ERR", "${e.message}")
         }
     }
 
