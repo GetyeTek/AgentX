@@ -65,10 +65,20 @@ class AgentXAccessibilityService : AccessibilityService() {
         showTapCircle(x, y)
         val path = android.graphics.Path()
         path.moveTo(x.toFloat(), y.toFloat())
+        path.lineTo(x.toFloat(), y.toFloat()) // Tiny line to ensure registration
+        
         val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 100)
         val builder = android.accessibilityservice.GestureDescription.Builder()
         builder.addStroke(stroke)
-        dispatchGesture(builder.build(), null, null)
+        
+        dispatchGesture(builder.build(), object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: android.accessibilityservice.GestureDescription?) {
+                com.agentx.app.DebugLogManager.log("GESTURE", "Tap completed at $x, $y")
+            }
+            override fun onCancelled(gestureDescription: android.accessibilityservice.GestureDescription?) {
+                com.agentx.app.DebugLogManager.log("GESTURE", "Tap CANCELLED at $x, $y")
+            }
+        }, null)
     }
 
     fun getUiTree(): String {
@@ -100,10 +110,13 @@ class AgentXAccessibilityService : AccessibilityService() {
     private fun showTapCircle(x: Int, y: Int) {
         thoughtText?.post {
             val feedbackView = View(this).apply {
-                setBackgroundResource(android.R.drawable.presence_online) // Simple green/red dot
-                background.setTint(0xFFFF0000.toInt()) // Bright Red
+                val shape = android.graphics.drawable.GradientDrawable()
+                shape.shape = android.graphics.drawable.GradientDrawable.OVAL
+                shape.setColor(0x88FF0000.toInt()) // Semi-transparent Red
+                shape.setStroke(5, 0xFFFF0000.toInt()) // Solid Red border
+                background = shape
             }
-            val size = 40
+            val size = 80
             val params = WindowManager.LayoutParams(
                 size, size,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -114,8 +127,41 @@ class AgentXAccessibilityService : AccessibilityService() {
                 this.x = x - (size / 2)
                 this.y = y - (size / 2)
             }
-            wm?.addView(feedbackView, params)
-            hideHandler.postDelayed({ try { wm?.removeView(feedbackView) } catch(e: Exception) {} }, 800)
+            try {
+                wm?.addView(feedbackView, params)
+                hideHandler.postDelayed({ try { wm?.removeView(feedbackView) } catch(e: Exception) {} }, 600)
+            } catch (e: Exception) {}
+        }
+    }
+
+    private fun showSwipeLine(x1: Int, y1: Int, x2: Int, y2: Int) {
+        thoughtText?.post {
+            val feedbackView = View(this).apply {
+                setBackgroundColor(0x660000FF.toInt()) // Semi-transparent Blue
+            }
+            
+            // Calculate distance and angle for the line visualization
+            val dx = (x2 - x1).toDouble()
+            val dy = (y2 - y1).toDouble()
+            val dist = Math.sqrt(dx * dx + dy * dy).toInt()
+            val angle = Math.toDegrees(Math.atan2(dy, dx)).toFloat()
+
+            val params = WindowManager.LayoutParams(
+                dist, 10, // Width is distance, height is thickness
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                this.x = x1
+                this.y = y1
+                this.rotation = angle
+            }
+            
+            try {
+                wm?.addView(feedbackView, params)
+                hideHandler.postDelayed({ try { wm?.removeView(feedbackView) } catch(e: Exception) {} }, 1000)
+            } catch (e: Exception) {}
         }
     }
 
@@ -152,15 +198,20 @@ class AgentXAccessibilityService : AccessibilityService() {
     }
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int) {
+        showSwipeLine(x1, y1, x2, y2)
         val path = android.graphics.Path()
         path.moveTo(x1.toFloat(), y1.toFloat())
         path.lineTo(x2.toFloat(), y2.toFloat())
         
-        // 300ms is a standard 'natural' swipe duration
-        val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 300)
+        val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 400)
         val builder = android.accessibilityservice.GestureDescription.Builder()
         builder.addStroke(stroke)
-        dispatchGesture(builder.build(), null, null)
+        
+        dispatchGesture(builder.build(), object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: android.accessibilityservice.GestureDescription?) {
+                com.agentx.app.DebugLogManager.log("GESTURE", "Swipe completed from $x1,$y1 to $x2,$y2")
+            }
+        }, null)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
