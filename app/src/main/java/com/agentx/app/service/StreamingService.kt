@@ -46,6 +46,18 @@ class StreamingService : Service() {
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
+    private val commandReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+            val cmd = intent?.getStringExtra("COMMAND") ?: return
+            sendUserText(cmd)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        registerReceiver(commandReceiver, android.content.IntentFilter("com.agentx.app.SEND_COMMAND"), RECEIVER_NOT_EXPORTED)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val resultCode = intent?.getIntExtra("RESULT_CODE", 0) ?: 0
         val resultData = intent?.getParcelableExtra<Intent>("RESULT_DATA")
@@ -120,7 +132,32 @@ class StreamingService : Service() {
                     DebugLogManager.log("PARSE_ERR", "Failed to decode: ${e.message}")
                 }
             }
+                // 3. Handle Tool Calls (Action commands from AI)
+                val sc = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
+                val toolCall = sc?.optJSONObject("tool_call") ?: sc?.optJSONObject("toolCall")
+                val functionCalls = toolCall?.optJSONArray("function_calls") ?: toolCall?.optJSONArray("functionCalls")
 
+                if (functionCalls != null) {
+                    for (i in 0 until functionCalls.length()) {
+                        val call = functionCalls.getJSONObject(i)
+                        val name = call.getString("name")
+                        val args = call.optJSONObject("args")
+
+                        DebugLogManager.log("ACTION", "Executing $name with $args")
+                        val a11y = AgentXAccessibilityService.instance
+                        
+                        when (name) {
+                            "tap" -> a11y?.tap(args.getInt("x"), args.getInt("y"))
+                            "home" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                            "back" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                            "recents" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
+                        }
+                    }
+                    // Skip forwarding tool calls to UI, they are silent actions
+                    return
+                }
+
+                clientSocket.send(event.data);
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 DebugLogManager.log("WS_FAIL", "${t.message}")
             }
@@ -267,7 +304,26 @@ class StreamingService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun sendUserText(text: String) {
+        val payload = JSONObject().apply {
+            put("client_content", JSONObject().apply {
+                put("turns", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply { put("text", text) })
+                        })
+                    })
+                })
+                put("turn_complete", true)
+            })
+        }
+        webSocket?.send(payload.toString())
+        DebugLogManager.log("USER", text)
+    }
+
     override fun onDestroy() {
+        unregisterReceiver(commandReceiver)
         isRunning = false
         handlerThread?.quitSafely()
         virtualDisplay?.release()
