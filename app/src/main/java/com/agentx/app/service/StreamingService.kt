@@ -99,9 +99,11 @@ class StreamingService : Service() {
                     
                     if (transcription != null) {
                         speechBuffer.append(transcription)
-                        // Only update HUD if we have a significant chunk or space to avoid flicker
+                        // Only update HUD/Logs if we have a significant chunk or space to avoid flicker
                         if (transcription.contains(" ") || speechBuffer.length > 20) {
-                            AgentXAccessibilityService.instance?.updateThought("🗣️ ${speechBuffer.toString()}")
+                            val currentSpeech = speechBuffer.toString()
+                            AgentXAccessibilityService.instance?.updateThought("🗣️ $currentSpeech")
+                            DebugLogManager.log("AI_VOICE", "🗣️ $currentSpeech")
                         }
                     }
 
@@ -120,8 +122,9 @@ class StreamingService : Service() {
                         
                         if (fullText.isNotEmpty()) {
                             val prefix = if (hasThought) "🤔" else "🧠"
-                            AgentXAccessibilityService.instance?.updateThought("$prefix $fullText")
-                            DebugLogManager.log("AI", fullText)
+                            val formattedText = "$prefix $fullText"
+                            AgentXAccessibilityService.instance?.updateThought(formattedText)
+                            DebugLogManager.log("AI_TURN", formattedText)
                         }
                     }
 
