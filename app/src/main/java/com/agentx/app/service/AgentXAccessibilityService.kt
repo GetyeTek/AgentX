@@ -136,32 +136,27 @@ class AgentXAccessibilityService : AccessibilityService() {
 
     private fun showSwipeLine(x1: Int, y1: Int, x2: Int, y2: Int) {
         thoughtText?.post {
-            val feedbackView = View(this).apply {
-                setBackgroundColor(0x660000FF.toInt()) // Semi-transparent Blue
+            val feedbackView = object : View(this) {
+                val paint = android.graphics.Paint().apply {
+                    color = 0xAA0000FF.toInt() // Blue
+                    strokeWidth = 15f
+                    style = android.graphics.Paint.Style.STROKE
+                    strokeCap = android.graphics.Paint.Cap.ROUND
+                    isAntiAlias = true
+                }
+                override fun onDraw(canvas: android.graphics.Canvas) {
+                    canvas.drawLine(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), paint)
+                }
             }
-            
-            // Calculate distance and angle for the line visualization
-            val dx = (x2 - x1).toDouble()
-            val dy = (y2 - y1).toDouble()
-            val dist = Math.sqrt(dx * dx + dy * dy).toInt()
-            val angle = Math.toDegrees(Math.atan2(dy, dx)).toFloat()
 
             val params = WindowManager.LayoutParams(
-                dist, 10, // Width is distance, height is thickness
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.START
-                this.x = x1
-                this.y = y1
-            }
+            )
             
-            // Apply rotation and pivot to the View itself
-            feedbackView.pivotX = 0f
-            feedbackView.pivotY = 5f
-            feedbackView.rotation = angle
-
             try {
                 wm?.addView(feedbackView, params)
                 hideHandler.postDelayed({ try { wm?.removeView(feedbackView) } catch(e: Exception) {} }, 1000)
