@@ -9,9 +9,9 @@ serve(async (req) => {
   const payload = {
     contents: [{
       parts: [
-        { text: `CONTEXT: You are AgentX. Current UI Tree: ${tree}` },
+        { text: `SYSTEM: You are an autonomous Android co-pilot. \nGoal: ${prompt}\n\nUI TREE ANALYSIS:\n${tree}` },
         { inline_data: { mime_type: "image/jpeg", data: image } },
-        { text: prompt }
+        { text: "Based on the current screenshot and UI tree, what is the next single action to achieve the goal? If the goal is reached, respond with text starting with 'DONE:'." }
       ]
     }],
     tools: [{
