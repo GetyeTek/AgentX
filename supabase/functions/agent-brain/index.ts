@@ -46,6 +46,7 @@ serve(async (req) => {
         { name: "tap_coords", description: "Tap X,Y coordinates (based on 1024 width)", parameters: { type: "OBJECT", properties: { x: { type: "integer" }, y: { type: "integer" } } } },
         { name: "tap_node", description: "Tap a specific element text or ID found in the UI tree", parameters: { type: "OBJECT", properties: { query: { type: "string" } } } },
         { name: "open_app", description: "Directly launch an app by name (e.g. 'YouTube', 'Settings', 'Messages')", parameters: { type: "OBJECT", properties: { name: { type: "string" } } } },
+        { name: "type_text", description: "Type text into an input field or the currently focused element", parameters: { type: "OBJECT", properties: { query: { type: "string", description: "Text or ID of the input field to target (optional)" }, text: { type: "string", description: "The text to type" } }, required: ["text"] } },
         { name: "swipe", description: "Swipe in a direction", parameters: { type: "OBJECT", properties: { direction: { type: "string", enum: ["up", "down", "left", "right"] } } } },
         { name: "home", description: "Press Home button", parameters: { type: "OBJECT", properties: {} } },
         { name: "back", description: "Press Back button", parameters: { type: "OBJECT", properties: {} } },
