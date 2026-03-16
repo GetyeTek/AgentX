@@ -148,6 +148,10 @@ class StreamingService : Service() {
                         
                         when (name) {
                             "tap" -> a11y?.tap(args.getInt("x"), args.getInt("y"))
+                            "swipe" -> a11y?.swipe(
+                                args.getInt("x1"), args.getInt("y1"), 
+                                args.getInt("x2"), args.getInt("y2")
+                            )
                             "home" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
                             "back" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
                             "recents" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
