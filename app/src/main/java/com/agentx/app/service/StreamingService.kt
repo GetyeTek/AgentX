@@ -141,6 +141,26 @@ class StreamingService : Service() {
         try {
             DebugLogManager.log("RAW_JSON", raw)
             val json = JSONObject(raw)
+
+            // Handle Macro Execution
+            if (json.optBoolean("macro_execution", false)) {
+                val steps = json.getJSONArray("steps")
+                val desc = json.optString("text", "Executing Shortcut...")
+                AgentXAccessibilityService.instance?.updateThought(desc)
+                
+                Thread { 
+                    for (i in 0 until steps.length()) {
+                        val step = steps.getJSONObject(i)
+                        val name = step.keys().next()
+                        val args = step.getJSONObject(name)
+                        executeTool(name, args)
+                        // Note: executeTool calls runBrainCycle at the end. 
+                        // For macros, we need to prevent that until the LAST step.
+                        if (i < steps.length() - 1) Thread.sleep(1000)
+                    }
+                }.start()
+                return
+            }
             
             if (json.has("error")) {
                 DebugLogManager.log("GOOGLE_ERR", json.getJSONObject("error").getString("message"))
@@ -230,6 +250,12 @@ class StreamingService : Service() {
                 val success = a11y?.typeText(query, text) ?: false
                 if (!success) DebugLogManager.log("A11Y", "Failed to type text into: $query")
                 waitTime = 1500L
+            }
+            "save_macro" -> {
+                // This tool is purely for the Edge Function to handle Database persistence.
+                // We log it here for debugging.
+                DebugLogManager.log("SYSTEM", "AI saved a new macro: ${args.optString("intent")}")
+                waitTime = 500L
             }
         }
 
