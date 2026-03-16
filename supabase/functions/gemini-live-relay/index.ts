@@ -28,7 +28,7 @@ serve(async (req) => {
           },
           system_instruction: {
             parts: [{
-              text: "You are AgentX. IMPORTANT: You must wrap every single sentence or coherent thought in triple backticks. Example: ```I see your screen.``` or ```You are clicking the start button.``` Only one sentence per block. Do not speak outside of backticks."
+              text: "You are AgentX. Your output logic is strictly regulated. You must ONLY output text inside triple backticks. You must wait until you have a FULL, GRAMMATICALLY COMPLETE SENTENCE ending in a period, question mark, or exclamation point before closing the backticks. Example: ```I can see that you are currently on the home screen.``` Never wrap partial phrases, fragments, or single words. One complete sentence per backtick block."
             }]
           },
           output_audio_transcription: {},
@@ -65,16 +65,20 @@ serve(async (req) => {
                 const coherentBlock = parts[1].trim();
                 
                 if (coherentBlock.length > 0) {
-                  console.log("--- [RELAY] 📦 Sending Coherent Block:", coherentBlock);
+                  // Clean up any accidental double backticks or artifacts
+                  const cleanedBlock = coherentBlock.replace(/`/g, '').trim();
                   
-                  // Send a synthetic Model Turn to the phone
-                  clientSocket.send(JSON.stringify({
-                    server_content: {
-                      model_turn: {
-                        parts: [{ text: coherentBlock }]
+                  if (cleanedBlock.length > 0) {
+                    console.log("--- [RELAY] 📦 Sending Coherent Sentence:", cleanedBlock);
+                    
+                    clientSocket.send(JSON.stringify({
+                      server_content: {
+                        model_turn: {
+                          parts: [{ text: cleanedBlock }]
+                        }
                       }
-                    }
-                  }));
+                    }));
+                  }
                 }
                 
                 // Remove the processed block from buffer but keep the rest (start of next sentence)
