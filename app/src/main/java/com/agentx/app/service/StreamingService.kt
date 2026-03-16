@@ -42,7 +42,12 @@ class StreamingService : Service() {
         }
 
         val resultCode = intent?.getIntExtra("RESULT_CODE", 0) ?: 0
-        val resultData = intent?.getParcelableExtra<Intent>("RESULT_DATA")
+        val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent?.getParcelableExtra("RESULT_DATA", Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent?.getParcelableExtra("RESULT_DATA")
+        }
 
         startForeground(1, createNotification())
 
@@ -177,9 +182,9 @@ class StreamingService : Service() {
                     "right" -> a11y?.swipe(w/4, h/2, w*3/4, h/2)
                 }
             }
-            "home" -> a11y?.performAction(AccessibilityService.GLOBAL_ACTION_HOME)
-            "back" -> a11y?.performAction(AccessibilityService.GLOBAL_ACTION_BACK)
-            "recents" -> a11y?.performAction(AccessibilityService.GLOBAL_ACTION_RECENTS)
+            "home" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+            "back" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+            "recents" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
             "wait" -> waitTime = args.optLong("seconds", 2) * 1000L
         }
 
