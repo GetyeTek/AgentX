@@ -1,10 +1,37 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
 
-const API_KEY = Deno.env.get("GEMINI_API_KEY");
-const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=" + API_KEY;
+const supabase = createClient(
+  Deno.env.get('SUPABASE_URL') ?? '',
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+);
 
 serve(async (req) => {
   const { image, tree, prompt } = await req.json();
+
+  // 1. LSF Strategy: Fetch least used active Gemini key
+  const { data: keys, error: dbError } = await supabase
+    .from('api_keys')
+    .select('*')
+    .eq('service', 'gemini')
+    .eq('is_active', true)
+    .or(`cooldown_until.is.null,cooldown_until.lt.${new Date().toISOString()}`)
+    .order('last_used_at', { ascending: true, nullsFirst: true })
+    .limit(1);
+
+  if (dbError || !keys || keys.length === 0) {
+    return new Response(JSON.stringify({ error: "No available Gemini API keys found in database." }), { status: 500 });
+  }
+
+  const selectedKey = keys[0];
+  const API_KEY = selectedKey.api_key;
+  const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${API_KEY}`;
+
+  // 2. Update last_used_at immediately to rotate the key
+  await supabase
+    .from('api_keys')
+    .update({ last_used_at: new Date().toISOString() })
+    .eq('id', selectedKey.id);
 
   const payload = {
     contents: [{
