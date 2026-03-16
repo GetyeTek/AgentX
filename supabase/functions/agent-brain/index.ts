@@ -74,7 +74,10 @@ serve(async (req) => {
           { name: "recents", description: "Open Recent Apps", parameters: { type: "OBJECT", properties: {} } },
           { name: "wait", description: "Wait for animations to finish or content to load", parameters: { type: "OBJECT", properties: { seconds: { type: "integer" } } } },
           { name: "save_macro", description: "Save a successful sequence of actions as a shortcut. ONLY save if the path was efficient.", parameters: { type: "OBJECT", properties: { intent: { type: "string", description: "Short description of the task" }, steps: { type: "array", items: { type: "object" } } }, required: ["intent", "steps"] } }
+          { name: "save_macro", description: "Save a successful sequence of actions as a shortcut. ONLY save if the path was efficient.", parameters: { type: "OBJECT", properties: { intent: { type: "string", description: "Short description of the task" }, steps: { type: "array", items: { type: "object" } } }, required: ["intent", "steps"] } },
+          { name: "search_app_directory", description: "Search the phone's installed apps directory to find the correct package name.", parameters: { type: "OBJECT", properties: { query: { type: "string", description: "The name of the app to search for" } }, required: ["query"] } }
         ]
+      },
       }],
       system_instruction: {
         parts: [{
@@ -97,7 +100,31 @@ serve(async (req) => {
       method: "POST",
       body: JSON.stringify(payload)
     });
-    const data = await res.json();
+    let data = await res.json();
+
+    // Handle search_app_directory tool call
+    const call = data.candidates?.[0]?.content?.parts?.find((p: any) => p.functionCall)?.functionCall;
+    if (call && call.name === "search_app_directory") {
+      const { data: apps } = await supabase
+        .from('installed_apps')
+        .select('app_name, package_name')
+        .ilike('app_name', `%${call.args.query}%`);
+      
+      // Inject results back to Gemini as a tool response and ask for the final action
+      const secondPayload = {
+        ...payload,
+        contents: [
+          ...payload.contents,
+          data.candidates[0].content,
+          {
+            role: "function",
+            parts: [{ functionResponse: { name: "search_app_directory", response: { results: apps } } }]
+          }
+        ]
+      };
+      const secondRes = await fetch(ENDPOINT, { method: "POST", body: JSON.stringify(secondPayload) });
+      data = await secondRes.json();
+    }
 
     // Handle save_macro tool call persistence
     const candidates = data.candidates?.[0];
