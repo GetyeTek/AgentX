@@ -191,31 +191,34 @@ class AgentXAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun launchAppByName(appName: String): Boolean {
+    fun launchAppByName(nameOrPackage: String): Boolean {
         val pm = packageManager
+
+        // 1. Try direct package launch first (zero-overhead)
+        val directIntent = pm.getLaunchIntentForPackage(nameOrPackage)
+        if (directIntent != null) {
+            directIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(directIntent)
+            return true
+        }
+
+        // 2. Fallback to name search
         val mainIntent = android.content.Intent(android.content.Intent.ACTION_MAIN, null)
         mainIntent.addCategory(android.content.Intent.CATEGORY_LAUNCHER)
-        
         val apps = pm.queryIntentActivities(mainIntent, 0)
         
-        // 1. Try Exact Match
-        var target = apps.find { it.loadLabel(pm).toString().equals(appName, ignoreCase = true) }
-        
-        // 2. Try Fuzzy (Contains)
+        var target = apps.find { it.loadLabel(pm).toString().equals(nameOrPackage, ignoreCase = true) }
         if (target == null) {
-            target = apps.find { it.loadLabel(pm).toString().contains(appName, ignoreCase = true) }
+            target = apps.find { it.loadLabel(pm).toString().contains(nameOrPackage, ignoreCase = true) }
         }
 
         return if (target != null) {
-            val launchIntent = pm.getLaunchIntentForPackage(target.activityInfo.packageName)
-            if (launchIntent != null) {
-                launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(launchIntent)
+            pm.getLaunchIntentForPackage(target.activityInfo.packageName)?.let {
+                it.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(it)
                 true
-            } else false
-        } else {
-            false
-        }
+            } ?: false
+        } else false
     }
 
     fun tapNodeByQuery(query: String): Boolean {
