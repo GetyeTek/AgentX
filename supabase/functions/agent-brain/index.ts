@@ -8,7 +8,10 @@ const supabase = createClient(
 
 serve(async (req) => {
   try {
-    const { image, tree, prompt } = await req.json();
+    const { image, tree, prompt, history } = await req.json();
+    const historyContext = history && history.length > 0 
+      ? `\nRECENT ACTION HISTORY:\n${history.map((h: string, i: number) => `${i+1}. ${h}`).join('\n')}`
+      : "";
 
     // 0. Fetch Knowledge Base: Get all available macro titles
     const { data: macroList } = await supabase.from('task_macros').select('intent_description');
@@ -38,7 +41,7 @@ serve(async (req) => {
     const payload = {
       contents: [{
         parts: [
-          { text: `SYSTEM: You are an autonomous Android co-pilot. \nGoal: ${prompt}\n\nUI TREE ANALYSIS:\n${tree}` },
+          { text: `SYSTEM: You are an autonomous Android co-pilot. \nGoal: ${prompt}${historyContext}\n\nUI TREE ANALYSIS:\n${tree}` },
           { inline_data: { mime_type: "image/jpeg", data: image } },
           { text: "Based on the current screenshot and UI tree, what is the next single action to achieve the goal? If the goal is reached, respond with text starting with 'DONE:'." }
         ]
