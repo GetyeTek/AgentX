@@ -222,7 +222,14 @@ class StreamingService : Service() {
                 val name = args.optString("name")
                 val success = a11y?.launchAppByName(name) ?: false
                 if (!success) DebugLogManager.log("APP_LAUNCH", "Failed to find app: $name")
-                waitTime = 3000L // Give app time to load before next capture
+                waitTime = 3000L
+            }
+            "type_text" -> {
+                val query = args.optString("query", null)
+                val text = args.optString("text", "")
+                val success = a11y?.typeText(query, text) ?: false
+                if (!success) DebugLogManager.log("A11Y", "Failed to type text into: $query")
+                waitTime = 1500L
             }
         }
 
