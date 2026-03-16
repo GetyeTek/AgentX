@@ -168,7 +168,8 @@ class StreamingService : Service() {
             override fun run() {
                 if (!isRunning) return
                 captureAndSendFrame()
-                handler?.postDelayed(this, 2500)
+                // Increased frequency to 1s as requested
+                handler?.postDelayed(this, 1000)
             }
         })
 
