@@ -165,8 +165,10 @@ class StreamingService : Service() {
             }
 
             if (textResponse.isNotEmpty()) {
-                AgentXAccessibilityService.instance?.updateThought(textResponse)
-                DebugLogManager.log("AI", textResponse)
+                // Clean up the response: remove technical prefixes if AI includes them
+                val displayThought = textResponse.replace("Thought:", "").replace("THOUGHT:", "").trim()
+                AgentXAccessibilityService.instance?.updateThought("AgentX: $displayThought")
+                DebugLogManager.log("AI_THOUGHT", displayThought)
             }
 
             if (call != null) {
