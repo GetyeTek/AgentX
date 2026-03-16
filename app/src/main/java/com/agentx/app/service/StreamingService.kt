@@ -117,7 +117,16 @@ class StreamingService : Service() {
                             val a11y = AgentXAccessibilityService.instance
                             
                             when (name) {
-                                "tap" -> a11y?.tap(args.getInt("x"), args.getInt("y"))
+                                "tap" -> {
+                                    val aiX = args.getInt("x")
+                                    val aiY = args.getInt("y")
+                                    // Scale from AI's 1024-width world back to real screen pixels
+                                    val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                                    val metrics = DisplayMetrics()
+                                    wm.defaultDisplay.getRealMetrics(metrics)
+                                    val scale = metrics.widthPixels.toFloat() / 1024f
+                                    a11y?.tap((aiX * scale).toInt(), (aiY * scale).toInt())
+                                }
                                 "swipe" -> a11y?.swipe(
                                     args.getInt("x1"), args.getInt("y1"), 
                                     args.getInt("x2"), args.getInt("y2")
