@@ -62,12 +62,37 @@ class AgentXAccessibilityService : AccessibilityService() {
     }
 
     fun tap(x: Int, y: Int) {
+        // Visual Feedback: Show a 'Laser' dot where we are tapping
+        showTapCircle(x, y)
+
         val path = android.graphics.Path()
         path.moveTo(x.toFloat(), y.toFloat())
         val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 100)
         val builder = android.accessibilityservice.GestureDescription.Builder()
         builder.addStroke(stroke)
         dispatchGesture(builder.build(), null, null)
+    }
+
+    private fun showTapCircle(x: Int, y: Int) {
+        thoughtText?.post {
+            val feedbackView = View(this).apply {
+                setBackgroundResource(android.R.drawable.presence_online) // Simple green/red dot
+                background.setTint(0xFFFF0000.toInt()) // Bright Red
+            }
+            val size = 40
+            val params = WindowManager.LayoutParams(
+                size, size,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                this.x = x - (size / 2)
+                this.y = y - (size / 2)
+            }
+            wm?.addView(feedbackView, params)
+            hideHandler.postDelayed({ try { wm?.removeView(feedbackView) } catch(e: Exception) {} }, 800)
+        }
     }
 
     fun performAction(actionId: Int) {
