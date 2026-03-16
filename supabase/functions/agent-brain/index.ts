@@ -9,6 +9,23 @@ const supabase = createClient(
 serve(async (req) => {
   const { image, tree, prompt } = await req.json();
 
+  // 0. Macro Search: Check if we have a shortcut for this intent
+  const { data: macro } = await supabase
+    .from('task_macros')
+    .select('*')
+    .textSearch('intent_description', prompt)
+    .limit(1)
+    .maybeSingle();
+
+  if (macro) {
+    console.log("--- MACRO FOUND: Using shortcut ---");
+    return new Response(JSON.stringify({
+      macro_execution: true,
+      steps: macro.steps,
+      text: `Using learned shortcut for: ${macro.intent_description}`
+    }), { headers: { "Content-Type": "application/json" } });
+  }
+
   // 1. LSF Strategy: Fetch least used active Gemini key
   const { data: keys, error: dbError } = await supabase
     .from('api_keys')
@@ -53,7 +70,14 @@ serve(async (req) => {
         { name: "recents", description: "Open Recent Apps", parameters: { type: "OBJECT", properties: {} } },
         { name: "wait", description: "Wait for animations to finish or content to load", parameters: { type: "OBJECT", properties: { seconds: { type: "integer" } } } }
       ]
-    }],
+        { name: "type_text", description: "Type text into an input field or the currently focused element", parameters: { type: "OBJECT", properties: { query: { type: "string", description: "Text or ID of the input field to target (optional)" }, text: { type: "string", description: "The text to type" } }, required: ["text"] } },
+        { name: "save_macro", description: "Save a successful sequence of actions as a shortcut for the future. ONLY save if the path was efficient and robust.", parameters: { type: "OBJECT", properties: { intent: { type: "string", description: "Short description of the task (e.g. 'DM on Telegram')" }, steps: { type: "array", items: { type: "object" }, description: "The sequence of tool calls used" } }, required: ["intent", "steps"] } }
+      ]
+              "- If an action doesn't change the screen, try a different approach.\n" +
+              "- LEARN: If you successfully complete a multi-step task efficiently, call 'save_macro' so you can do it instantly next time.\n" +
+              "- Respond with 'DONE: [Task] completed' only when the final goal is clearly visible on screen."
+      }]
+    }
     system_instruction: { 
       parts: [{
         text: "You are AgentX, an autonomous Android co-pilot. \n" +
