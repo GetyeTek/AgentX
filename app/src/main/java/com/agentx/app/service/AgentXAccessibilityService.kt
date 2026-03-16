@@ -170,24 +170,39 @@ class AgentXAccessibilityService : AccessibilityService() {
 
     fun typeText(query: String?, text: String): Boolean {
         val root = rootInActiveWindow ?: return false
+        
+        // 1. Find the target node
         val targetNode = if (!query.isNullOrBlank()) {
-            // Find by text/id
-            root.findAccessibilityNodeInfosByText(query).firstOrNull { it.isEditable && it.isVisibleToUser }
-                ?: findNodeByDescription(root, query)?.takeIf { it.isEditable }
+            root.findAccessibilityNodeInfosByText(query).firstOrNull { it.isVisibleToUser }
+                ?: findNodeByDescription(root, query)
         } else {
-            // Fallback to currently focused
             root.findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT)
         }
 
-        return if (targetNode != null) {
+        if (targetNode == null) return false
+
+        // 2. Ensure node is focused/active by clicking it
+        val bounds = android.graphics.Rect()
+        targetNode.getBoundsInScreen(bounds)
+        tap(bounds.centerX(), bounds.centerY())
+
+        // 3. Use Clipboard + Paste (More reliable for 3rd party apps)
+        val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clip = android.content.ClipData.newPlainText("agent_input", text)
+        clipboard.setPrimaryClip(clip)
+
+        // Small delay to let focus settle
+        Thread.sleep(300)
+
+        val pasteSuccess = targetNode.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_PASTE)
+        
+        // 4. Fallback to SET_TEXT if paste fails
+        return if (!pasteSuccess) {
             val arguments = android.os.Bundle()
-            arguments.putCharSequence(
-                android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                text
-            )
+            arguments.putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
             targetNode.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
         } else {
-            false
+            true
         }
     }
 
