@@ -81,6 +81,7 @@ class StreamingService : Service() {
     }
 
     private fun runBrainCycle(userPrompt: String) {
+        lastUserCommand = userPrompt
         Thread {
             val imageBase64 = captureCurrentFrameBase64() ?: return@Thread
             val uiTree = AgentXAccessibilityService.instance?.getUiTree() ?: "[]"
@@ -127,8 +128,16 @@ class StreamingService : Service() {
     private fun processBrainResponse(raw: String) {
         val json = JSONObject(raw)
         val candidates = json.optJSONArray("candidates")?.optJSONObject(0)
-        val call = candidates?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optJSONObject("function_call")
-        
+        val content = candidates?.optJSONObject("content")
+        val parts = content?.optJSONArray("parts")
+        val call = parts?.optJSONObject(0)?.optJSONObject("function_call")
+        val textResponse = parts?.optJSONObject(0)?.optString("text", "") ?: ""
+
+        if (textResponse.isNotEmpty()) {
+            AgentXAccessibilityService.instance?.updateThought(textResponse)
+            DebugLogManager.log("AI_SAYS", textResponse)
+        }
+
         if (call != null) {
             val name = call.getString("name")
             val args = call.optJSONObject("args")
@@ -157,11 +166,21 @@ class StreamingService : Service() {
                 "wait" -> waitTime = args.optLong("seconds", 2) * 1000L
             }
             
-            DebugLogManager.log("ACTION", "Executed $name, waiting ${waitTime}ms for next observation...")
+            DebugLogManager.log("ACTION", "Executed $name, waiting ${waitTime}ms...")
             Thread.sleep(waitTime)
-            runBrainCycle("Action executed. Observe the current state and determine the next step.")
+            // Continuous Autonomy: Re-trigger the brain cycle using the same initial goal prompt
+            // This allows the AI to keep 'looking' until it explicitly stops using text.
+            runBrainCycle(lastUserCommand)
+        } else if (textResponse.startsWith("DONE:")) {
+            DebugLogManager.log("SYSTEM", "Task Completed.")
+        } else {
+            // If the AI just spoke but didn't act or finish, look again after a short delay
+            Thread.sleep(3000)
+            runBrainCycle(lastUserCommand)
         }
     }
+
+    private var lastUserCommand: String = ""
 
     private fun startCaptureLoop() {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
