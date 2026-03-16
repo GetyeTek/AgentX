@@ -34,7 +34,12 @@ serve(async (req) => {
             parts: [{ text: "You are AgentX, a real-time AI assistant with vision. You will receive frequent screenshots via inline_data in user turns. Analyze the screen and provide helpful, concise context. If the screen hasn't changed significantly, keep your responses very brief or silent. Always respond to audio inputs immediately." }]
           },
           input_audio_transcription: {},
-          output_audio_transcription: {}
+          output_audio_transcription: {},
+          context_window_compression: {
+            sliding_window: {
+              target_tokens: 15000
+            }
+          }
         }
       }));
     };
