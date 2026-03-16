@@ -10,10 +10,11 @@ serve(async (req) => {
   const { image, tree, prompt } = await req.json();
 
   // 0. Macro Search: Check if we have a shortcut for this intent
+  // We use a simplified ilike search for better matching of partial phrases
   const { data: macro } = await supabase
     .from('task_macros')
     .select('*')
-    .textSearch('intent_description', prompt)
+    .ilike('intent_description', `%${prompt}%`)
     .limit(1)
     .maybeSingle();
 
@@ -22,7 +23,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({
       macro_execution: true,
       steps: macro.steps,
-      text: `Using learned shortcut for: ${macro.intent_description}`
+      text: `Executing learned shortcut: ${macro.intent_description}`
     }), { headers: { "Content-Type": "application/json" } });
   }
 
@@ -101,6 +102,18 @@ serve(async (req) => {
     body: JSON.stringify(payload)
   });
   const data = await res.json();
+
+  // Handle save_macro tool call persistence
+  const candidates = data.candidates?.[0];
+  const call = candidates?.content?.parts?.find((p: any) => p.functionCall)?.functionCall;
+
+  if (call && call.name === "save_macro") {
+    console.log("--- SAVING NEW MACRO ---");
+    await supabase.from('task_macros').insert({
+      intent_description: call.args.intent,
+      steps: call.args.steps
+    });
+  }
   
   // Log to Supabase Console
   console.log("--- GEMINI RAW RESPONSE ---");
