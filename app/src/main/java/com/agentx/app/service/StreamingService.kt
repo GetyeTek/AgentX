@@ -137,7 +137,15 @@ class StreamingService : Service() {
 
     private fun processBrainResponse(raw: String) {
         try {
+            DebugLogManager.log("RAW_JSON", raw)
             val json = JSONObject(raw)
+            
+            // Handle potential Top-Level Error from Google
+            if (json.has("error")) {
+                DebugLogManager.log("GOOGLE_ERR", json.getJSONObject("error").getString("message"))
+                return
+            }
+
             val candidates = json.optJSONArray("candidates")?.optJSONObject(0)
             val content = candidates?.optJSONObject("content")
             val parts = content?.optJSONArray("parts")
