@@ -218,6 +218,12 @@ class StreamingService : Service() {
             "back" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
             "recents" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
             "wait" -> waitTime = args.optLong("seconds", 2) * 1000L
+            "open_app" -> {
+                val name = args.optString("name")
+                val success = a11y?.launchAppByName(name) ?: false
+                if (!success) DebugLogManager.log("APP_LAUNCH", "Failed to find app: $name")
+                waitTime = 3000L // Give app time to load before next capture
+            }
         }
 
         DebugLogManager.log("ACTION", "Executed $name. Sleeping ${waitTime}ms...")
