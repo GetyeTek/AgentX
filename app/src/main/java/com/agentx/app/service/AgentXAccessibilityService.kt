@@ -173,6 +173,33 @@ class AgentXAccessibilityService : AccessibilityService() {
         performGlobalAction(actionId)
     }
 
+    fun launchAppByName(appName: String): Boolean {
+        val pm = packageManager
+        val mainIntent = android.content.Intent(android.content.Intent.ACTION_MAIN, null)
+        mainIntent.addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        
+        val apps = pm.queryIntentActivities(mainIntent, 0)
+        
+        // 1. Try Exact Match
+        var target = apps.find { it.loadLabel(pm).toString().equals(appName, ignoreCase = true) }
+        
+        // 2. Try Fuzzy (Contains)
+        if (target == null) {
+            target = apps.find { it.loadLabel(pm).toString().contains(appName, ignoreCase = true) }
+        }
+
+        return if (target != null) {
+            val launchIntent = pm.getLaunchIntentForPackage(target.activityInfo.packageName)
+            if (launchIntent != null) {
+                launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(launchIntent)
+                true
+            } else false
+        } else {
+            false
+        }
+    }
+
     fun tapNodeByQuery(query: String): Boolean {
         val root = rootInActiveWindow ?: return false
         val list = root.findAccessibilityNodeInfosByText(query)
