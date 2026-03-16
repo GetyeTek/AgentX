@@ -93,38 +93,23 @@ class StreamingService : Service() {
                     val json = JSONObject(raw)
                     val sc = json.optJSONObject("server_content") ?: json.optJSONObject("serverContent")
 
-                    // 1. Handle Incremental Speech (Reduced update frequency)
-                    val transcription = sc?.optJSONObject("output_transcription")?.optString("text")
-                        ?: sc?.optJSONObject("outputTranscription")?.optString("text")
-                    
-                    if (transcription != null) {
-                        speechBuffer.append(transcription)
-                        // Only update HUD/Logs if we have a significant chunk or space to avoid flicker
-                        if (transcription.contains(" ") || speechBuffer.length > 20) {
-                            val currentSpeech = speechBuffer.toString()
-                            AgentXAccessibilityService.instance?.updateThought("🗣️ $currentSpeech")
-                            DebugLogManager.log("AI_VOICE", "🗣️ $currentSpeech")
-                        }
-                    }
+                    // 1. Incremental speech handling removed to prevent flickering.
+                    // The Edge Function now sends finalized sentences as model_turns.
 
-                    // 2. Handle Finalized Turns
+                    // 2. Handle Coherent Sentences (Sent as model_turn by Edge Function)
                     val mt = sc?.optJSONObject("model_turn") ?: sc?.optJSONObject("modelTurn")
                     val parts = mt?.optJSONArray("parts")
                     if (parts != null) {
-                        speechBuffer.setLength(0)
                         var fullText = ""
-                        var hasThought = false
                         for (i in 0 until parts.length()) {
                             val part = parts.optJSONObject(i)
-                            if (part?.optBoolean("thought") == true) hasThought = true
                             fullText += part?.optString("text") ?: ""
                         }
                         
                         if (fullText.isNotEmpty()) {
-                            val prefix = if (hasThought) "🤔" else "🧠"
-                            val formattedText = "$prefix $fullText"
-                            AgentXAccessibilityService.instance?.updateThought(formattedText)
-                            DebugLogManager.log("AI_TURN", formattedText)
+                            // The Edge Function sends cleaned text, we just display it
+                            AgentXAccessibilityService.instance?.updateThought("🧠 $fullText")
+                            DebugLogManager.log("AI_TURN", "🧠 $fullText")
                         }
                     }
 
