@@ -55,12 +55,23 @@ class AgentXAccessibilityService : AccessibilityService() {
             thoughtText?.apply {
                 text = newText
                 visibility = View.VISIBLE
-                
-                // Reset auto-hide timer (5 seconds)
                 hideHandler.removeCallbacks(hideRunnable)
                 hideHandler.postDelayed(hideRunnable, 5000)
             }
         }
+    }
+
+    fun tap(x: Int, y: Int) {
+        val path = android.graphics.Path()
+        path.moveTo(x.toFloat(), y.toFloat())
+        val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 100)
+        val builder = android.accessibilityservice.GestureDescription.Builder()
+        builder.addStroke(stroke)
+        dispatchGesture(builder.build(), null, null)
+    }
+
+    fun performAction(actionId: Int) {
+        performGlobalAction(actionId)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
