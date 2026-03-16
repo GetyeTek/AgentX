@@ -62,15 +62,39 @@ class AgentXAccessibilityService : AccessibilityService() {
     }
 
     fun tap(x: Int, y: Int) {
-        // Visual Feedback: Show a 'Laser' dot where we are tapping
         showTapCircle(x, y)
-
         val path = android.graphics.Path()
         path.moveTo(x.toFloat(), y.toFloat())
         val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 100)
         val builder = android.accessibilityservice.GestureDescription.Builder()
         builder.addStroke(stroke)
         dispatchGesture(builder.build(), null, null)
+    }
+
+    fun getUiTree(): String {
+        val root = rootInActiveWindow ?: return "[]"
+        val nodes = mutableListOf<org.json.JSONObject>()
+        flattenNodes(root, nodes)
+        return org.json.JSONArray(nodes).toString()
+    }
+
+    private fun flattenNodes(node: android.view.accessibility.AccessibilityNodeInfo, list: MutableList<org.json.JSONObject>) {
+        if (node.isVisibleToUser) {
+            val bounds = android.graphics.Rect()
+            node.getBoundsInScreen(bounds)
+            val obj = org.json.JSONObject().apply {
+                put("text", node.text ?: node.contentDescription ?: "")
+                put("class", node.className?.split(".")?.last() ?: "")
+                put("id", node.viewIdResourceName?.split("/")?.last() ?: "")
+                put("clickable", node.isClickable)
+                put("bounds", "${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}")
+            }
+            if (node.isClickable || node.text != null) list.add(obj)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            flattenNodes(child, list)
+        }
     }
 
     private fun showTapCircle(x: Int, y: Int) {
