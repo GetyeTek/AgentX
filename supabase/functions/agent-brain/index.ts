@@ -45,6 +45,7 @@ serve(async (req) => {
       function_declarations: [
         { name: "tap_coords", description: "Tap X,Y coordinates (based on 1024 width)", parameters: { type: "OBJECT", properties: { x: { type: "integer" }, y: { type: "integer" } } } },
         { name: "tap_node", description: "Tap a specific element text or ID found in the UI tree", parameters: { type: "OBJECT", properties: { query: { type: "string" } } } },
+        { name: "open_app", description: "Directly launch an app by name (e.g. 'YouTube', 'Settings', 'Messages')", parameters: { type: "OBJECT", properties: { name: { type: "string" } } } },
         { name: "swipe", description: "Swipe in a direction", parameters: { type: "OBJECT", properties: { direction: { type: "string", enum: ["up", "down", "left", "right"] } } } },
         { name: "home", description: "Press Home button", parameters: { type: "OBJECT", properties: {} } },
         { name: "back", description: "Press Back button", parameters: { type: "OBJECT", properties: {} } },
@@ -57,10 +58,8 @@ serve(async (req) => {
         text: "You are AgentX, an autonomous Android co-pilot. \n" +
               "CRITICAL RULE: Every response MUST include a 'text' part explaining what you are doing (e.g., 'Opening the app drawer to find Settings') AND a function call for the action.\n\n" +
               "ORCHESTRATION PLAN:\n" +
-              "1. If not on the Home screen, call 'home'.\n" +
-              "2. From Home, open the App Drawer (usually 'swipe' with direction 'up').\n" +
-              "3. Browse the App Drawer: Look at the UI Tree for the app name. If not found, 'swipe' to the next page.\n" +
-              "4. Once the app icon is visible, use 'tap_node' with the app's name.\n\n" +
+              "1. If the user asks to open an app, use 'open_app' with the app name immediately. Do not try to find it manually.\n" +
+              "2. For navigation within an app, use visual tools (tap, swipe).\n\n" +
               "RULES:\n" +
               "- Always provide a brief, helpful 'Thought' in your response text.\n" +
               "- Never guess coordinates for an icon if it is in the UI Tree; use tap_node.\n" +
