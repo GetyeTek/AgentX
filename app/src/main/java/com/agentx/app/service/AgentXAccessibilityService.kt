@@ -74,6 +74,18 @@ class AgentXAccessibilityService : AccessibilityService() {
         performGlobalAction(actionId)
     }
 
+    fun swipe(x1: Int, y1: Int, x2: Int, y2: Int) {
+        val path = android.graphics.Path()
+        path.moveTo(x1.toFloat(), y1.toFloat())
+        path.lineTo(x2.toFloat(), y2.toFloat())
+        
+        // 300ms is a standard 'natural' swipe duration
+        val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 300)
+        val builder = android.accessibilityservice.GestureDescription.Builder()
+        builder.addStroke(stroke)
+        dispatchGesture(builder.build(), null, null)
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
     
