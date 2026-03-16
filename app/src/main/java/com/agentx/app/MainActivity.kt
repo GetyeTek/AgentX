@@ -49,8 +49,12 @@ class MainActivity : ComponentActivity() {
                 var userCommand by remember { mutableStateOf("") }
                 
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
                         Text("AgentX Controller", style = MaterialTheme.typography.headlineMedium)
                         Spacer(modifier = Modifier.height(20.dp))
                         
@@ -100,7 +104,10 @@ class MainActivity : ComponentActivity() {
                         )
                         Button(
                             onClick = {
-                                val intent = Intent("com.agentx.app.SEND_COMMAND").apply { putExtra("COMMAND", userCommand) }
+                                val intent = Intent("com.agentx.app.SEND_COMMAND").apply { 
+                                    setPackage(packageName)
+                                    putExtra("COMMAND", userCommand) 
+                                }
                                 sendBroadcast(intent)
                                 userCommand = ""
                             },
