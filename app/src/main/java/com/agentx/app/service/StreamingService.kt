@@ -58,6 +58,12 @@ class StreamingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val cmd = intent?.getStringExtra("COMMAND")
+        if (cmd != null) {
+            runBrainCycle(cmd)
+            return START_NOT_STICKY
+        }
+
         val resultCode = intent?.getIntExtra("RESULT_CODE", 0) ?: 0
         val resultData = intent?.getParcelableExtra<Intent>("RESULT_DATA")
         isMicEnabled = intent?.getBooleanExtra("ENABLE_MIC", false) ?: false
@@ -128,16 +134,32 @@ class StreamingService : Service() {
             val args = call.optJSONObject("args")
             val a11y = AgentXAccessibilityService.instance
             
+            var waitTime = 2000L
             when (name) {
                 "tap_coords" -> {
                     val scale = getSystemService(WindowManager::class.java).defaultDisplay.width / 1024f
                     a11y?.tap((args.getInt("x") * scale).toInt(), (args.getInt("y") * scale).toInt())
                 }
+                "swipe" -> {
+                    val metrics = resources.displayMetrics
+                    val w = metrics.widthPixels
+                    val h = metrics.heightPixels
+                    when(args.getString("direction")) {
+                        "up" -> a11y?.swipe(w/2, h*3/4, w/2, h/4)
+                        "down" -> a11y?.swipe(w/2, h/4, w/2, h*3/4)
+                        "left" -> a11y?.swipe(w*3/4, h/2, w/4, h/2)
+                        "right" -> a11y?.swipe(w/4, h/2, w*3/4, h/2)
+                    }
+                }
                 "home" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                "back" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                "recents" -> a11y?.performAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
+                "wait" -> waitTime = args.optLong("seconds", 2) * 1000L
             }
-            // After acting, we automatically re-trigger a 'look' to see what happened
-            Thread.sleep(2000)
-            runBrainCycle("Observe the result of the last action and continue the task.")
+            
+            DebugLogManager.log("ACTION", "Executed $name, waiting ${waitTime}ms for next observation...")
+            Thread.sleep(waitTime)
+            runBrainCycle("Action executed. Observe the current state and determine the next step.")
         }
     }
 
