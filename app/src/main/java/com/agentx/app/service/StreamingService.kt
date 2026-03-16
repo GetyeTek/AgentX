@@ -32,8 +32,9 @@ class StreamingService : Service() {
     private var lastUserCommand: String = ""
     
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -194,6 +195,11 @@ class StreamingService : Service() {
             "tap_coords" -> {
                 val scale = getSystemService(WindowManager::class.java).defaultDisplay.width / 1024f
                 a11y?.tap((args.getInt("x") * scale).toInt(), (args.getInt("y") * scale).toInt())
+            }
+            "tap_node" -> {
+                val query = args.optString("query", "")
+                val success = a11y?.tapNodeByQuery(query) ?: false
+                if (!success) DebugLogManager.log("A11Y", "Could not find node: $query")
             }
             "swipe" -> {
                 val metrics = resources.displayMetrics
