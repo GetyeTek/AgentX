@@ -17,6 +17,8 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.agentx.app.DebugLogManager
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
@@ -93,7 +95,8 @@ class StreamingService : Service() {
                 put("prompt", userPrompt)
             }
 
-            val body = RequestBody.create(MediaType.parse("application/json"), json.toString())
+            val mediaType = "application/json".toMediaType()
+            val body = json.toString().toRequestBody(mediaType)
             val request = Request.Builder()
                 .url("https://xvldfsmxskhemkslsbym.supabase.co/functions/v1/agent-brain")
                 .post(body)
@@ -101,7 +104,7 @@ class StreamingService : Service() {
 
             try {
                 client.newCall(request).execute().use { response ->
-                    val respData = response.body()?.string() ?: ""
+                    val respData = response.body?.string() ?: ""
                     processBrainResponse(respData)
                 }
             } catch (e: Exception) {
