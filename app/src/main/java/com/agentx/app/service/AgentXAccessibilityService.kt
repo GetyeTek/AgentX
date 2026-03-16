@@ -168,6 +168,29 @@ class AgentXAccessibilityService : AccessibilityService() {
         performGlobalAction(actionId)
     }
 
+    fun typeText(query: String?, text: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val targetNode = if (!query.isNullOrBlank()) {
+            // Find by text/id
+            root.findAccessibilityNodeInfosByText(query).firstOrNull { it.isEditable && it.isVisibleToUser }
+                ?: findNodeByDescription(root, query)?.takeIf { it.isEditable }
+        } else {
+            // Fallback to currently focused
+            root.findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT)
+        }
+
+        return if (targetNode != null) {
+            val arguments = android.os.Bundle()
+            arguments.putCharSequence(
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                text
+            )
+            targetNode.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+        } else {
+            false
+        }
+    }
+
     fun launchAppByName(appName: String): Boolean {
         val pm = packageManager
         val mainIntent = android.content.Intent(android.content.Intent.ACTION_MAIN, null)
