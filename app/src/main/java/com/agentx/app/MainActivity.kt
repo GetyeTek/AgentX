@@ -160,15 +160,22 @@ class MainActivity : ComponentActivity() {
     private fun syncInstalledAppsIfNeeded() {
         val prefs = getSharedPreferences("agentx_prefs", Context.MODE_PRIVATE)
         val lastSync = prefs.getLong("last_app_sync", 0)
-        val threeDaysMs = 3 * 24 * 60 * 60 * 1000L
+        val fiveMinutesMs = 5 * 60 * 1000L // Force sync more often during dev
 
-        if (System.currentTimeMillis() - lastSync > threeDaysMs) {
+        // If it's been 5 mins OR if we've never synced, run it.
+        if (System.currentTimeMillis() - lastSync > fiveMinutesMs) {
             Thread { 
                 try {
+                    DebugLogManager.log("SYNC", "Starting background app sync...")
                     val pm = packageManager
                     val mainIntent = Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
                     val apps = pm.queryIntentActivities(mainIntent, 0)
                     
+                    if (apps.isEmpty()) {
+                        DebugLogManager.log("SYNC_WARN", "No apps found. Check permissions.")
+                        return@Thread
+                    }
+
                     val jsonArray = org.json.JSONArray()
                     for (app in apps) {
                         val obj = org.json.JSONObject()
@@ -178,22 +185,26 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val client = okhttp3.OkHttpClient()
-                    val body = org.json.JSONObject().apply { put("apps", jsonArray) }.toString()
-                        .toRequestBody("application/json".toMediaType())
+                    val jsonBody = org.json.JSONObject()
+                    jsonBody.put("apps", jsonArray)
+                    
+                    val body = jsonBody.toString().toRequestBody("application/json".toMediaType())
                     
                     val request = okhttp3.Request.Builder()
                         .url("https://xvldfsmxskhemkslsbym.supabase.co/functions/v1/sync-apps")
                         .post(body)
                         .build()
 
-                    client.newCall(request).execute().use {
-                        if (it.isSuccessful) {
+                    client.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
                             prefs.edit().putLong("last_app_sync", System.currentTimeMillis()).apply()
-                            DebugLogManager.log("SYNC", "App directory synced to cloud")
+                            DebugLogManager.log("SYNC", "Successfully synced ${apps.size} apps to Supabase")
+                        } else {
+                            DebugLogManager.log("SYNC_ERR", "Server returned ${response.code}")
                         }
                     }
                 } catch (e: Exception) {
-                    DebugLogManager.log("SYNC_ERR", e.message ?: "Unknown error")
+                    DebugLogManager.log("SYNC_ERR", "Error during sync: ${e.message}")
                 }
             }.start()
         }
