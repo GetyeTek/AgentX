@@ -233,34 +233,27 @@ class StreamingService : Service() {
             cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
             val base64Image = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 
-            // 1. Send the visual data
-            val imagePayload = JSONObject().apply {
-                put("realtime_input", JSONObject().apply {
-                    put("media_chunks", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("mime_type", "image/jpeg")
-                            put("data", base64Image)
-                        })
-                    })
-                })
-            }
-            webSocket?.send(imagePayload.toString())
-
-            // 2. THE NUDGE: Explicitly tell Gemini to look and talk now
-            val nudge = JSONObject().apply {
+            // Send image inline within a single turn
+            val payload = JSONObject().apply {
                 put("client_content", JSONObject().apply {
                     put("turns", JSONArray().apply {
                         put(JSONObject().apply {
                             put("role", "user")
                             put("parts", JSONArray().apply {
-                                put(JSONObject().apply { put("text", "Analyze this screen.") })
+                                put(JSONObject().apply {
+                                    put("inline_data", JSONObject().apply {
+                                        put("mime_type", "image/jpeg")
+                                        put("data", base64Image)
+                                    })
+                                })
+                                put(JSONObject().apply { put("text", ".") })
                             })
                         })
                     })
                     put("turn_complete", true)
                 })
             }
-            webSocket?.send(nudge.toString())
+            webSocket?.send(payload.toString())
 
             // Clean up both bitmaps to prevent memory leaks
             fullBitmap.recycle()
