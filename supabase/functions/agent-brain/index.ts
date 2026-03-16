@@ -16,9 +16,13 @@ serve(async (req) => {
     }],
     tools: [{
       function_declarations: [
-        { name: "tap_coords", description: "Tap X,Y coordinates", parameters: { type: "OBJECT", properties: { x: { type: "integer" }, y: { type: "integer" } } } },
-        { name: "tap_node", description: "Tap a node based on text or ID from tree", parameters: { type: "OBJECT", properties: { query: { type: "string" } } } },
-        { name: "home", description: "Go home", parameters: { type: "OBJECT", properties: {} } }
+        { name: "tap_coords", description: "Tap X,Y coordinates (based on 1024 width)", parameters: { type: "OBJECT", properties: { x: { type: "integer" }, y: { type: "integer" } } } },
+        { name: "tap_node", description: "Tap a specific element text or ID found in the UI tree", parameters: { type: "OBJECT", properties: { query: { type: "string" } } } },
+        { name: "swipe", description: "Swipe in a direction", parameters: { type: "OBJECT", properties: { direction: { type: "string", enum: ["up", "down", "left", "right"] } } } },
+        { name: "home", description: "Press Home button", parameters: { type: "OBJECT", properties: {} } },
+        { name: "back", description: "Press Back button", parameters: { type: "OBJECT", properties: {} } },
+        { name: "recents", description: "Open Recent Apps", parameters: { type: "OBJECT", properties: {} } },
+        { name: "wait", description: "Wait for animations to finish or content to load", parameters: { type: "OBJECT", properties: { seconds: { type: "integer" } } } }
       ]
     }],
     system_instruction: { parts: [{ text: "Analyze the UI tree first. If a clickable node matches the goal, use tap_node. Otherwise, use tap_coords based on image pixels (1024 width scaled)." }] }
