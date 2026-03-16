@@ -123,6 +123,34 @@ class AgentXAccessibilityService : AccessibilityService() {
         performGlobalAction(actionId)
     }
 
+    fun tapNodeByQuery(query: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val list = root.findAccessibilityNodeInfosByText(query)
+        
+        // Try exact text match first, then content description
+        val target = list.firstOrNull { it.isVisibleToUser } 
+            ?: findNodeByDescription(root, query)
+
+        return if (target != null) {
+            val bounds = android.graphics.Rect()
+            target.getBoundsInScreen(bounds)
+            tap(bounds.centerX(), bounds.centerY())
+            true
+        } else {
+            false
+        }
+    }
+
+    private fun findNodeByDescription(node: android.view.accessibility.AccessibilityNodeInfo, query: String): android.view.accessibility.AccessibilityNodeInfo? {
+        if (node.contentDescription?.toString()?.contains(query, ignoreCase = true) == true) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findNodeByDescription(child, query)
+            if (result != null) return result
+        }
+        return null
+    }
+
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int) {
         val path = android.graphics.Path()
         path.moveTo(x1.toFloat(), y1.toFloat())
