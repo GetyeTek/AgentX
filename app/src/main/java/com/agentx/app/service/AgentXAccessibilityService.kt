@@ -155,9 +155,13 @@ class AgentXAccessibilityService : AccessibilityService() {
                 gravity = Gravity.TOP or Gravity.START
                 this.x = x1
                 this.y = y1
-                this.rotation = angle
             }
             
+            // Apply rotation and pivot to the View itself
+            feedbackView.pivotX = 0f
+            feedbackView.pivotY = 5f
+            feedbackView.rotation = angle
+
             try {
                 wm?.addView(feedbackView, params)
                 hideHandler.postDelayed({ try { wm?.removeView(feedbackView) } catch(e: Exception) {} }, 1000)
