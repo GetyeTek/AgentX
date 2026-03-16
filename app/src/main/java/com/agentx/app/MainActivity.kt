@@ -46,8 +46,10 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 var showDebug by remember { mutableStateOf(false) }
                 var isMicEnabled by remember { mutableStateOf(false) }
+                var userCommand by remember { mutableStateOf("") }
                 
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("AgentX Controller", style = MaterialTheme.typography.headlineMedium)
                         Spacer(modifier = Modifier.height(20.dp))
@@ -83,6 +85,29 @@ class MainActivity : ComponentActivity() {
                         
                         OutlinedButton(onClick = { showDebug = true }, modifier = Modifier.fillMaxWidth()) {
                             Text("📜 VIEW RAW LOGS")
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Text("Direct Command", style = MaterialTheme.typography.labelLarge)
+                        OutlinedTextField(
+                            value = userCommand,
+                            onValueChange = { userCommand = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("e.g. Open the settings app") }
+                        )
+                        Button(
+                            onClick = {
+                                val intent = Intent("com.agentx.app.SEND_COMMAND").apply { putExtra("COMMAND", userCommand) }
+                                sendBroadcast(intent)
+                                userCommand = ""
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = userCommand.isNotBlank()
+                        ) {
+                            Text("📤 SEND TO AGENT")
                         }
                     }
                     
