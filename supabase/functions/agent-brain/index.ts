@@ -33,5 +33,10 @@ serve(async (req) => {
     body: JSON.stringify(payload)
   });
   const data = await res.json();
+  
+  // Log to Supabase Console
+  console.log("--- GEMINI RAW RESPONSE ---");
+  console.log(JSON.stringify(data, null, 2));
+
   return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
 });
