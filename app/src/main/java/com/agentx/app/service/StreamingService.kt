@@ -30,6 +30,7 @@ class StreamingService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var lastUserCommand: String = ""
+    private val actionHistory = mutableListOf<String>()
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
@@ -41,6 +42,7 @@ class StreamingService : Service() {
         val cmd = intent?.getStringExtra("COMMAND")
         if (cmd != null) {
             lastUserCommand = cmd
+            actionHistory.clear() // Reset history for new command
             runBrainCycle(cmd)
             return START_NOT_STICKY
         }
@@ -95,6 +97,7 @@ class StreamingService : Service() {
                 put("image", imageBase64)
                 put("tree", uiTree)
                 put("prompt", userPrompt)
+                put("history", JSONArray(actionHistory))
             }
 
             val mediaType = "application/json".toMediaType()
@@ -259,7 +262,11 @@ class StreamingService : Service() {
             }
         }
 
-        DebugLogManager.log("ACTION", "Executed $name. Sleeping ${waitTime}ms...")
+        val actionSummary = "Executed $name with args $args"
+        actionHistory.add(actionSummary)
+        if (actionHistory.size > 10) actionHistory.removeAt(0)
+
+        DebugLogManager.log("ACTION", "$actionSummary. Sleeping ${waitTime}ms...")
         Thread.sleep(waitTime)
         runBrainCycle(lastUserCommand)
     }
